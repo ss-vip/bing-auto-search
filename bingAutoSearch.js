@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         Bing Auto Search
-// @version      2026040101
+// @version      2026040201
 // @description  無人值守 Bing 自動隨機搜尋
 // @author       Hank
 // @match        https://*.bing.com/*
@@ -23,7 +23,7 @@
     max_ph: 35, // 行動版搜尋次數上限
     min_interval: 50, // 最小隨機秒數
     max_interval: 120, // 最大隨機秒數
-    keywordsUrl: '', // 外部關鍵詞池 URL（JSON 格式）
+    keywordsUrl: 'https://raw.githubusercontent.com/ss-vip/bing-auto-search/refs/heads/main/example.json', // 外部詞彙池 URL（JSON 格式）
     defaultKeywordsPool: [
       'Python 教學', 'Java 環境變數', 'Linux 常用指令', 'Docker 部署', 'React vs Vue', 'ChatGPT API 教學', 'GitHub Copilot 評測',
       'SQL 優化 技巧', '正則表達式 教學', 'C++ 指標 教學', 'Rust 入門 教學', 'Unity 遊戲開發', 'VS Code',
@@ -46,9 +46,14 @@
   const TRIGGER_KEY = 'bing_auto_trigger';
   const HEARTBEAT_KEY = 'bing_auto_heartbeat';
   const KEYWORDS_CACHE_KEY = 'bing_keywords_cache';
+  const TASK_STATUS_KEY = 'bing_task_status';  // sessionStorage key for per-tab status
 
-  let isRunning = false;
-  let isCompleted = false;
+  // 任務狀態常數
+  const STATUS_PAUSED = 'paused';    // 已暫停：手動暫停後，不會進行任務
+  const STATUS_RUNNING = 'running';  // 進行中：自動搜尋+滾動
+  const STATUS_RESTING = 'resting'; // 休息中：已達每日上限，等待跨天自動重置
+
+  let taskStatus = STATUS_PAUSED;  // 當前任務狀態（每個分頁獨立）
   let timerStart = 0;
   let timerInterval = 0;
   let lastKeywordFromPool = true;
@@ -61,6 +66,25 @@
   let isBackground = false;
   let scrollInterval = null;  // 滾動間隔計時器
   let scrollTimeout = null;  // 滾動超時計時器
+
+  // 獲取當前分頁的任務狀態
+  function getTabTaskStatus() {
+    try {
+      const stored = sessionStorage.getItem(TASK_STATUS_KEY);
+      if (stored && [STATUS_PAUSED, STATUS_RUNNING, STATUS_RESTING].includes(stored)) {
+        return stored;
+      }
+    } catch (e) { /* 忽略錯誤 */ }
+    return null;  // 返回 null 表示沒有保存的狀態
+  }
+
+  // 設置當前分頁的任務狀態
+  function setTabTaskStatus(status) {
+    taskStatus = status;
+    try {
+      sessionStorage.setItem(TASK_STATUS_KEY, status);
+    } catch (e) { /* 忽略錯誤 */ }
+  }
 
   // 外部詞彙池載入（含 localStorage 緩存，當日有效）
   async function loadExternalKeywords() {
@@ -141,24 +165,27 @@
     // 嘗試恢復排程狀態
     restoreScheduleState();
 
-    // 檢查自動運行狀態
-    const shouldAutoRun = GM_getValue(AUTO_RUN_KEY, false);
-    const config = getConfig();
-
-    if (shouldAutoRun) {
-      const canRun = canRunSearch(config);
-      if (canRun) {
-        // 自動開始任務
+    // 優先從 sessionStorage 恢復當前分頁的任務狀態
+    const savedStatus = getTabTaskStatus();
+    if (savedStatus && savedStatus !== STATUS_PAUSED) {
+      // 恢復之前保存的狀態
+      setTabTaskStatus(savedStatus);
+      // 如果是 running 狀態，自動開始搜尋
+      if (savedStatus === STATUS_RUNNING) {
         setTimeout(() => startSearch(), 1500);
-      } else {
-        // 任務已完成，等待明日
-        GM_setValue(AUTO_RUN_KEY, false);
       }
+    } else {
+      // 預設為暫停狀態
+      setTabTaskStatus(STATUS_PAUSED);
     }
 
     initStyles();
     initUI();
-    doAutoScroll();
+
+    // 只有在 running 狀態時才執行滾動
+    if (taskStatus === STATUS_RUNNING && window.location.href.includes('bing.com/search')) {
+      doAutoScroll();
+    }
 
     // 啟動保活機制
     startKeepAlive();
@@ -169,14 +196,14 @@
     // 頁面載入完成後執行滾動
     if (document.readyState === 'complete') {
       setTimeout(() => {
-        if (isRunning && window.location.href.includes('bing.com/search')) {
+        if (isTaskRunning() && window.location.href.includes('bing.com/search')) {
           doAutoScroll();
         }
       }, 3000);
     } else {
       window.addEventListener('load', () => {
         setTimeout(() => {
-          if (isRunning && window.location.href.includes('bing.com/search')) {
+          if (isTaskRunning() && window.location.href.includes('bing.com/search')) {
             doAutoScroll();
           }
         }, 3000);
@@ -185,47 +212,37 @@
 
     // 持續監測 URL 變化
     let lastUrl = window.location.href;
-    let lastIsRunning = isRunning;
+    let lastTaskStatus = taskStatus;
     setInterval(() => {
       const currentUrl = window.location.href;
       if (currentUrl !== lastUrl) {
         lastUrl = currentUrl;
         setTimeout(() => {
-          if (isRunning && window.location.href.includes('bing.com/search')) {
+          if (isTaskRunning() && window.location.href.includes('bing.com/search')) {
             doAutoScroll();
           }
         }, 6000);
       }
-      // 只在 isRunning 狀態改變時更新 mini-icon 樣式
-      if (lastIsRunning !== isRunning) {
-        lastIsRunning = isRunning;
-        const toolBox = document.getElementById('br_reward_tool');
-        const miniIcon = toolBox ? toolBox.querySelector('.br_mini-icon') : null;
-        if (miniIcon) {
-          if (isRunning) {
-            miniIcon.style.background = '#d63031';
-            miniIcon.classList.add('running');
-          } else {
-            miniIcon.style.background = '#0078d4';
-            miniIcon.classList.remove('running');
-          }
-        }
+      // 只在 taskStatus 狀態改變時更新 UI
+      if (lastTaskStatus !== taskStatus) {
+        lastTaskStatus = taskStatus;
+        updateStatusBadge(taskStatus);
       }
     }, 500);
 
     // 監聽 hashchange 事件
     window.addEventListener('hashchange', () => {
       setTimeout(() => {
-        if (isRunning && window.location.href.includes('bing.com/search')) {
+        if (isTaskRunning() && window.location.href.includes('bing.com/search')) {
           doAutoScroll();
         }
       }, 6000);
     });
 
-    // 監聽 popstate 事件（瀏覽器導航）
+    // 監聽 popstate 事件
     window.addEventListener('popstate', () => {
       setTimeout(() => {
-        if (isRunning && window.location.href.includes('bing.com/search')) {
+        if (isTaskRunning() && window.location.href.includes('bing.com/search')) {
           doAutoScroll();
         }
       }, 6000);
@@ -233,7 +250,7 @@
 
     // 監聽 visibilitychange 恢復滾動
     document.addEventListener('visibilitychange', () => {
-      if (!document.hidden && isRunning && window.location.href.includes('bing.com/search')) {
+      if (!document.hidden && isTaskRunning() && window.location.href.includes('bing.com/search')) {
         doAutoScroll();
       }
     });
@@ -254,15 +271,6 @@
           timerStart = performance.now() - (data.time - data.timestamp);
         }
       }
-
-      // 恢復心跳狀態
-      const heartbeat = localStorage.getItem(HEARTBEAT_KEY);
-      if (heartbeat) {
-        const beat = JSON.parse(heartbeat);
-        if (beat.isRunning) {
-          GM_setValue(AUTO_RUN_KEY, true);
-        }
-      }
     } catch (e) { /* 忽略錯誤 */ }
   }
 
@@ -276,22 +284,21 @@
     // 頁面載入時檢查是否需要執行
     checkScheduledExecution();
 
-    // 每分鐘檢查一次狀態
+    // 定時更新 UI 顯示最新的計數（從 GM_storage 讀取）
     if (checkInterval) clearInterval(checkInterval);
     checkInterval = setInterval(() => {
       checkAndResetDay();
-      checkAutoRunFromBackground();
       checkScheduledExecution();
-    }, 60000);
+      updateUI();
+    }, 10000);
 
-    // 發送心跳到其他分頁
+    // 發送心跳到其他分頁（只共享計數器資訊，不共享任務狀態）
     if (heartbeatInterval) clearInterval(heartbeatInterval);
     heartbeatInterval = setInterval(() => {
       try {
         const config = getConfig();
         localStorage.setItem(HEARTBEAT_KEY, JSON.stringify({
           timestamp: Date.now(),
-          isRunning: isRunning,
           nextExecuteTime: nextExecuteTime,
           pc_count: config.pc_count,
           ph_count: config.ph_count
@@ -331,7 +338,7 @@
       } catch (e) { /* 忽略錯誤 */ }
     }
 
-    if (!isRunning || isCompleted) return;
+    if (!isTaskRunning() || taskStatus === STATUS_RESTING) return;
 
     // 如果有排程的執行時間，且已經到了
     if (scheduledTime > 0 && now >= scheduledTime) {
@@ -342,7 +349,7 @@
     }
 
     // 如果沒有排程，但正在運行中，重新計算下次執行時間
-    if (isRunning && scheduledTime === 0) {
+    if (isTaskRunning() && scheduledTime === 0) {
       // 從計時器狀態計算剩餘時間
       const elapsed = performance.now() - timerStart;
       const remaining = timerInterval - elapsed;
@@ -355,7 +362,7 @@
   }
 
   function checkAutoRunFromBackground() {
-    if (isRunning) return;
+    if (isTaskRunning()) return;
 
     const shouldAutoRun = GM_getValue(AUTO_RUN_KEY, false);
     const config = getConfig();
@@ -416,10 +423,18 @@
       };
       saveConfig(newConfig);
 
+      // 如果是休息中狀態，跨天後自動恢復為進行中
+      if (taskStatus === STATUS_RESTING) {
+        setTabTaskStatus(STATUS_RUNNING);
+        startSearchLoop();  // 重新開始搜尋迴圈
+        doAutoScroll();     // 恢復滾動
+      }
+
       // 設置自動運行
       GM_setValue(AUTO_RUN_KEY, true);
 
       updateUI();
+      updateStatus("跨天重置成功! 任務進行中...", "#e67e22");
     }
 
     // 凌晨自動開始任務（0-2點）
@@ -470,6 +485,13 @@
       #br_reward_tool .br_auto-badge { display: inline-block; background: #27ae60; color: #fff; font-size: 10px; padding: 2px 6px; border-radius: 3px; margin-left: 6px; vertical-align: middle; }
       #br_reward_tool .br_live-indicator { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #27ae60; margin-right: 6px; animation: pulse 1.5s infinite; }
       @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.5; } 100% { opacity: 1; } }
+      #br_reward_tool .br_mini-icon.paused { background: #0078d4; }
+      #br_reward_tool .br_mini-icon.running { background: #d63031; animation: breathe 2s ease-in-out infinite; }
+      #br_reward_tool .br_mini-icon.resting { background: #27ae60; }
+      #br_reward_tool .br_status-badge { display: inline-block; font-size: 10px; padding: 2px 6px; border-radius: 3px; margin-left: 6px; vertical-align: middle; }
+      #br_reward_tool .br_status-badge.paused { background: #666; color: #fff; }
+      #br_reward_tool .br_status-badge.running { background: #e67e22; color: #fff; }
+      #br_reward_tool .br_status-badge.resting { background: #27ae60; color: #fff; }
     `);
   }
 
@@ -479,7 +501,7 @@
     const toolHtml = `
       <div id="br_reward_tool" class="br_minimized">
         <div class="br_header">
-          <span class="br_title"><span class="br_live-indicator"></span>隨機搜尋 <span class="br_auto-badge" id="br_auto_badge" style="display:none;">AUTO</span></span>
+          <span class="br_title"><span class="br_live-indicator"></span>隨機搜尋 <span class="br_status-badge" id="br_status_badge">暫停</span></span>
           <span class="br_date">${today}</span>
           <button class="br_minimize-btn" title="最小化">–</button>
         </div>
@@ -562,15 +584,22 @@
 
   function updateStatusAfterInit() {
     const config = getConfig();
-    const shouldAutoRun = GM_getValue(AUTO_RUN_KEY, false);
     const canRun = canRunSearch(config);
 
-    if (shouldAutoRun && canRun) {
+    // 根據任務狀態顯示對應文字
+    if (taskStatus === STATUS_PAUSED) {
+      updateStatus("等待開始...", "#666");
+      updateStatusBadge(STATUS_PAUSED);
+    } else if (taskStatus === STATUS_RUNNING && canRun) {
       updateStatus("腳本運行中...", "#e67e22");
-      updateAutoBadge(true);
-    } else if (shouldAutoRun && !canRun) {
+      updateStatusBadge(STATUS_RUNNING);
+    } else if (taskStatus === STATUS_RUNNING && !canRun) {
+      // 已達上限但狀態仍是 running，轉為 resting
+      onTaskCompleted();
+    } else if (taskStatus === STATUS_RESTING) {
       updateStatus("任務已完成! 等待明日...", "#27ae60");
       updateCountdownUI("完成");
+      updateStatusBadge(STATUS_RESTING);
     }
   }
 
@@ -582,36 +611,40 @@
 
     const btn = document.getElementById('br_toggle_btn');
 
-    if (isRunning) {
-      isRunning = false;
+    if (isTaskRunning()) {
+      setTabTaskStatus(STATUS_PAUSED);
       stopAutoScroll();  // 停止頁面滾動
       GM_setValue(AUTO_RUN_KEY, false);
       btn.textContent = "▶ 繼續搜尋";
       btn.className = "br_btn br_btn_start";
       updateStatus("已暫停", "#666");
       updateCountdownUI("--");
-      updateAutoBadge(false);
+      updateStatusBadge(STATUS_PAUSED);
     } else {
       const config = getConfig();
       const currentPageType = getBingPageType();
 
+      // 如果已達上限，進入休息中狀態
       if (currentPageType === 'pc' && config.pc_count >= CONFIG.max_pc) {
+        setTabTaskStatus(STATUS_RESTING);
         updateStatus("桌面版任務已達標", "#27ae60");
+        updateCountdownUI("完成");
         return;
       }
       if (currentPageType === 'ph' && config.ph_count >= CONFIG.max_ph) {
+        setTabTaskStatus(STATUS_RESTING);
         updateStatus("行動版任務已達標", "#27ae60");
+        updateCountdownUI("完成");
         return;
       }
 
-      isRunning = true;
-      isCompleted = false;
+      setTabTaskStatus(STATUS_RUNNING);
       GM_setValue(AUTO_RUN_KEY, true);
       btn.textContent = "⏸ 暫停搜尋";
       btn.className = "br_btn br_btn_stop";
       updateStatus("腳本運行中...", "#e67e22");
       startSearchLoop();
-      updateAutoBadge(true);
+      updateStatusBadge(STATUS_RUNNING);
     }
   }
 
@@ -624,18 +657,17 @@
     if (currentPageType === 'pc' && config.pc_count >= CONFIG.max_pc) {
       updateStatus("桌面版任務已達標", "#27ae60");
       GM_setValue(AUTO_RUN_KEY, false);
-      updateAutoBadge(false);
+      updateStatusBadge(STATUS_RESTING);
       return;
     }
     if (currentPageType === 'ph' && config.ph_count >= CONFIG.max_ph) {
       updateStatus("行動版任務已達標", "#27ae60");
       GM_setValue(AUTO_RUN_KEY, false);
-      updateAutoBadge(false);
+      updateStatusBadge(STATUS_RESTING);
       return;
     }
 
-    isRunning = true;
-    isCompleted = false;
+    setTabTaskStatus(STATUS_RUNNING);
     GM_setValue(AUTO_RUN_KEY, true);
 
     const btn = document.getElementById('br_toggle_btn');
@@ -643,11 +675,11 @@
 
     updateStatus("腳本運行中...", "#e67e22");
     startSearchLoop();
-    updateAutoBadge(true);
+    updateStatusBadge(STATUS_RUNNING);
   }
 
   function startSearchLoop() {
-    if (!isRunning) return;
+    if (!isTaskRunning()) return;
 
     const config = getConfig();
     const currentPageType = getBingPageType();
@@ -671,7 +703,7 @@
 
   let lastSecondUpdate = 0;
   function timerLoop(timestamp) {
-    if (!isRunning) return;
+    if (!isTaskRunning()) return;
 
     // 每秒更新倒數
     const elapsed = timestamp - timerStart;
@@ -714,7 +746,7 @@
 
   function performSearch() {
     if (!checkLoginStatus()) return;
-    if (!isRunning) return;
+    if (!isTaskRunning()) return;
 
     const config = getConfig();
     const currentPageType = getBingPageType();
@@ -769,7 +801,7 @@
 
       // 強制跳轉後備
       setTimeout(() => {
-        if (isRunning && !window.location.href.includes('bing.com/search?')) {
+        if (isTaskRunning() && !window.location.href.includes('bing.com/search?')) {
           window.location.href = 'https://www.bing.com/search?q=' + encodeURIComponent(keyword);
         }
       }, 4000);
@@ -777,8 +809,7 @@
   }
 
   function onTaskCompleted() {
-    isRunning = false;
-    isCompleted = true;
+    setTabTaskStatus(STATUS_RESTING);  // 進入休息中狀態
     stopAutoScroll();  // 停止頁面滾動
     GM_setValue(AUTO_RUN_KEY, false);
 
@@ -787,7 +818,29 @@
 
     updateStatus("任務已完成! 等待明日自動重啟...", "#27ae60");
     updateCountdownUI("完成");
-    updateAutoBadge(false);
+    updateStatusBadge(STATUS_RESTING);
+  }
+
+  // ============================================
+  // 任務狀態管理
+  // ============================================
+  function isTaskRunning() {
+    return taskStatus === STATUS_RUNNING;
+  }
+
+  function isTaskPaused() {
+    return taskStatus === STATUS_PAUSED;
+  }
+
+  function isTaskResting() {
+    return taskStatus === STATUS_RESTING;
+  }
+
+  // 檢查是否可執行任務（任務狀態為 running 且未達上限）
+  function canExecuteTask() {
+    if (taskStatus !== STATUS_RUNNING) return false;
+    const config = getConfig();
+    return canRunSearch(config);
   }
 
   // ============================================
@@ -849,9 +902,33 @@
     if (phEl) phEl.textContent = String(data.ph_count);
   }
 
-  function updateAutoBadge(show) {
-    const badge = document.getElementById('br_auto_badge');
-    if (badge) badge.style.display = show ? 'inline-block' : 'none';
+  function updateStatusBadge(status) {
+    const badge = document.getElementById('br_status_badge');
+    const miniIcon = document.querySelector('.br_mini-icon');
+
+    // 移除所有狀態類別
+    if (badge) {
+      badge.className = 'br_status-badge';
+      badge.classList.add(status);
+
+      switch (status) {
+        case STATUS_PAUSED:
+          badge.textContent = '暫停';
+          break;
+        case STATUS_RUNNING:
+          badge.textContent = '進行中';
+          break;
+        case STATUS_RESTING:
+          badge.textContent = '休息中';
+          break;
+      }
+    }
+
+    // 更新 mini-icon 樣式
+    if (miniIcon) {
+      miniIcon.classList.remove('paused', 'running', 'resting');
+      miniIcon.classList.add(status);
+    }
   }
 
   function cleanCount(toolBox) {
@@ -860,11 +937,10 @@
       const currentPageType = getBingPageType();
       saveConfig({ date: today, lastDate: today, pc_count: 0, ph_count: 0, deviceType: currentPageType, autoStart: false });
       GM_setValue(AUTO_RUN_KEY, false);
-      isRunning = false;
-      isCompleted = false;
+      setTabTaskStatus(STATUS_PAUSED);
       stopAutoScroll();  // 停止頁面滾動
       updateUI();
-      updateAutoBadge(false);
+      updateStatusBadge(STATUS_PAUSED);
       updateStatus("等待開始...", "#666");
     }
   }
@@ -873,7 +949,7 @@
     if (!window.location.href.includes('bing.com/search')) {
       return;
     }
-    if (!isRunning) {
+    if (!isTaskRunning()) {
       return;
     }
 
@@ -890,34 +966,33 @@
   }
 
   function startScrollLoop() {
-    if (!isRunning || !window.location.href.includes('bing.com/search')) {
+    if (!isTaskRunning() || !window.location.href.includes('bing.com/search')) {
       stopAutoScroll();
       return;
     }
 
-    // 平滑滾動到底部
+    // 平滑滾動
     const scrollHeight = Math.max(document.body.scrollHeight, document.documentElement.scrollHeight);
     window.scrollTo({ top: scrollHeight, behavior: 'smooth' });
 
-    // 2 秒後滾回頂部
     scrollTimeout = setTimeout(() => {
-      if (isRunning && window.location.href.includes('bing.com/search')) {
+      if (isTaskRunning() && window.location.href.includes('bing.com/search')) {
         window.scrollTo({ top: 0, behavior: 'smooth' });
 
-        // 滾動完成後，繼續下一次迴圈（間隔 8 秒）
+        // 滾動完成後，繼續下一次迴圈
         scrollInterval = setInterval(() => {
-          if (!isRunning || !window.location.href.includes('bing.com/search')) {
+          if (!isTaskRunning() || !window.location.href.includes('bing.com/search')) {
             stopAutoScroll();
             return;
           }
 
-          // 平滑滾動到底部
+          // 到底部
           const sh = Math.max(document.body.scrollHeight, document.documentElement.scrollHeight);
           window.scrollTo({ top: sh, behavior: 'smooth' });
 
-          // 2 秒後滾回頂部
+          // 回頂部
           scrollTimeout = setTimeout(() => {
-            if (isRunning && window.location.href.includes('bing.com/search')) {
+            if (isTaskRunning() && window.location.href.includes('bing.com/search')) {
               window.scrollTo({ top: 0, behavior: 'smooth' });
             }
           }, 2000);
@@ -944,7 +1019,7 @@
       const computedStyle = window.getComputedStyle(signInElement);
       if (computedStyle.display === 'none' || computedStyle.visibility === 'hidden') return true;
       alert('請登入 Bing 以繼續任務');
-      if (isRunning) toggleScript();
+      if (isTaskRunning()) toggleScript();
       return false;
     }
     return true;
@@ -1037,12 +1112,14 @@
     const urlObserver = new MutationObserver(() => {
       if (window.location.href !== lastUrl) {
         lastUrl = window.location.href;
-        // 頁面跳轉後延遲執行滾動
+        // 頁面跳轉後延遲執行滾動和重新開始搜尋
         setTimeout(() => {
-          if (isRunning && window.location.href.includes('bing.com/search')) {
+          if (isTaskRunning() && window.location.href.includes('bing.com/search')) {
             doAutoScroll();
+            // 重新開始搜尋迴圈
+            startSearchLoop();
           }
-        }, 1500);
+        }, 3000);
       }
     });
     urlObserver.observe(document.body, { childList: true, subtree: true });
@@ -1050,10 +1127,12 @@
     // 同時監聽 popstate 事件（瀏覽器導航）
     window.addEventListener('popstate', () => {
       setTimeout(() => {
-        if (isRunning && window.location.href.includes('bing.com/search')) {
+        if (isTaskRunning() && window.location.href.includes('bing.com/search')) {
           doAutoScroll();
+          // 重新開始搜尋迴圈
+          startSearchLoop();
         }
-      }, 1500);
+      }, 3000);
     });
   }
 })();
