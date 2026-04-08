@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         Bing Auto Search
-// @version      2026040201
+// @version      2026040801
 // @description  無人值守 Bing 自動隨機搜尋
 // @author       Hank
 // @match        https://*.bing.com/*
@@ -24,6 +24,28 @@
     min_interval: 50, // 最小隨機秒數
     max_interval: 120, // 最大隨機秒數
     keywordsUrl: 'https://raw.githubusercontent.com/ss-vip/bing-auto-search/refs/heads/main/example.json', // 外部詞彙池 URL（JSON 格式）
+
+    // 詞綴權重配置（數值為百分比，0-100）
+    fixWeight: {
+      none: 60,   // 不加詞綴的機率
+      prefix: 20, // 加前綴的機率
+      suffix: 20  // 加後綴的機率
+    },
+
+    // 英文詞綴權重配置（數值為百分比，0-100）
+    enFixWeight: {
+      none: 40,   // 不加詞綴的機率
+      prefix: 10, // 加前綴的機率
+      suffix: 40, // 加後綴的機率
+      both: 10    // 兩邊都加的機率
+    },
+
+    // 中文詞庫與英文笑話 API 關鍵字使用權重（數值為百分比，0-100）
+    sourceWeight: {
+      chinese: 30, // 中文機率
+      english: 70  // 英文機率
+    },
+
     defaultKeywordsPool: [
       'Python 教學', 'Java 環境變數', 'Linux 常用指令', 'Docker 部署', 'React vs Vue', 'ChatGPT API 教學', 'GitHub Copilot 評測',
       'SQL 優化 技巧', '正則表達式 教學', 'C++ 指標 教學', 'Rust 入門 教學', 'Unity 遊戲開發', 'VS Code',
@@ -35,10 +57,136 @@
     defaultEnWordFixPool: ['英文', '中文', '翻譯', '解釋', '意思', '造句', '定義', '用法', '例句', '解說', '範例', '簡述']
   };
 
-  // 預設詞彙池
+  // 防呆：驗證並修正 CONFIG 數值
+  (function validateConfig() {
+    // 驗證搜尋次數上限
+    if (CONFIG.max_pc < 1) CONFIG.max_pc = 1;
+    if (CONFIG.max_ph < 1) CONFIG.max_ph = 1;
+
+    // 驗證隨機秒數（防呆：最小不能大於最大）
+    const minInt = Math.max(1, parseInt(CONFIG.min_interval) || 1);
+    const maxInt = Math.max(minInt, parseInt(CONFIG.max_interval) || minInt);
+    CONFIG.min_interval = minInt;
+    CONFIG.max_interval = maxInt;
+
+    // 驗證詞綴權重（確保總和為 100%）
+    const totalWeight = (cfg) => (cfg.none || 0) + (cfg.prefix || 0) + (cfg.suffix || 0) + (cfg.both || 0);
+
+    if (totalWeight(CONFIG.fixWeight) !== 100) {
+      const w = CONFIG.fixWeight;
+      const none = Math.max(0, Math.min(100, w.none || 20));
+      const prefix = Math.max(0, Math.min(100, w.prefix || 40));
+      const suffix = 100 - none - prefix;
+      CONFIG.fixWeight = { none, prefix, suffix: Math.max(0, suffix) };
+    }
+
+    if (totalWeight(CONFIG.enFixWeight) !== 100) {
+      const w = CONFIG.enFixWeight;
+      const none = Math.max(0, Math.min(100, w.none || 25));
+      const prefix = Math.max(0, Math.min(100, w.prefix || 25));
+      const suffix = Math.max(0, Math.min(100, w.suffix || 25));
+      const both = 100 - none - prefix - suffix;
+      CONFIG.enFixWeight = { none, prefix, suffix, both: Math.max(0, both) };
+    }
+
+    // 驗證來源權重（確保總和為 100%）
+    const srcWeight = CONFIG.sourceWeight;
+    const srcTotal = (srcWeight.chinese || 0) + (srcWeight.english || 0);
+    if (srcTotal !== 100) {
+      const chinese = Math.max(0, Math.min(100, srcWeight.chinese || 50));
+      CONFIG.sourceWeight = { chinese, english: 100 - chinese };
+    }
+  })();
+
+  // 詞彙池（含來源標記）
   let keywordsPool = CONFIG.defaultKeywordsPool;
   let keywordFixPool = CONFIG.defaultKeywordFixPool;
   let enWordFixPool = CONFIG.defaultEnWordFixPool;
+
+  // 詞綴組合記錄（用於去重）
+  let usedPrefixSuffixCombos = new Set();
+
+  // 記錄已使用的關鍵詞（避免短期內重複）
+  let usedKeywordsToday = new Set();
+  const MAX_RECENT_HISTORY = 50;  // 保留最近 50 個
+
+  // 合併並去重詞彙池
+  function mergeAndDeduplicateKeywords(externalKeywords, defaultKeywords) {
+    const combined = [...new Set([...defaultKeywords, ...externalKeywords])];
+    return combined.filter(k => k && k.trim().length > 0);
+  }
+
+  // 合併並去重詞綴池
+  function mergeAndDeduplicateFixes(externalFixes, defaultFixes) {
+    return [...new Set([...defaultFixes, ...externalFixes])].filter(f => f && f.trim().length > 0);
+  }
+
+  // 初始化詞綴組合記錄
+  function initUsedCombos() {
+    usedPrefixSuffixCombos = new Set();
+  }
+
+  // 生成唯一詞綴組合鍵值
+  function getComboKey(prefix, suffix, baseKeyword) {
+    return `${prefix || 'none'}_${suffix || 'none'}_${baseKeyword}`;
+  }
+
+  // 檢查詞綴組合是否已使用
+  function isComboUsed(prefix, suffix, baseKeyword) {
+    return usedPrefixSuffixCombos.has(getComboKey(prefix, suffix, baseKeyword));
+  }
+
+  // 標記詞綴組合已使用
+  function markComboUsed(prefix, suffix, baseKeyword) {
+    usedPrefixSuffixCombos.add(getComboKey(prefix, suffix, baseKeyword));
+  }
+
+  // 重置詞綴組合記錄（在跨天時）
+  function resetComboTracking() {
+    usedPrefixSuffixCombos.clear();
+  }
+
+  // 從詞庫中取得未重複的關鍵詞
+  function getUniqueKeywordFromPool() {
+    // 嘗試找到未使用過的詞
+    const available = keywordsPool.filter(k => !usedKeywordsToday.has(k));
+
+    let keyword;
+    if (available.length > 0) {
+      keyword = available[Math.floor(Math.random() * available.length)];
+    } else {
+      // 詞庫用完了，從頭重置
+      usedKeywordsToday.clear();
+      keyword = keywordsPool[Math.floor(Math.random() * keywordsPool.length)];
+    }
+
+    // 記錄並維護歷史數量
+    usedKeywordsToday.add(keyword);
+    if (usedKeywordsToday.size > MAX_RECENT_HISTORY) {
+      // 移除最早的記錄
+      const first = usedKeywordsToday.values().next().value;
+      usedKeywordsToday.delete(first);
+    }
+
+    return keyword;
+  }
+
+  // 清除當日關鍵詞記錄（跨天時呼叫）
+  function clearUsedKeywords() {
+    usedKeywordsToday.clear();
+  }
+
+  // 移除重複詞彙（如 "最新 油價走勢 最新" -> "最新 油價走勢"）
+  function removeDuplicateWords(keyword) {
+    const words = keyword.split(/\s+/);
+    const seen = new Set();
+    const uniqueWords = words.filter(word => {
+      if (seen.has(word)) return false;
+      seen.add(word);
+      return true;
+    });
+    return uniqueWords.join(' ');
+  }
 
   const STORAGE_KEY = 'bingAutoSearch';
   const AUTO_RUN_KEY = 'bing_auto_run';
@@ -56,7 +204,6 @@
   let taskStatus = STATUS_PAUSED;  // 當前任務狀態（每個分頁獨立）
   let timerStart = 0;
   let timerInterval = 0;
-  let lastKeywordFromPool = true;
   let isDragging = false;
   let dragX = 0, dragY = 0;
   let checkInterval = null;
@@ -86,20 +233,58 @@
     } catch (e) { /* 忽略錯誤 */ }
   }
 
-  // 外部詞彙池載入（含 localStorage 緩存，當日有效）
+  // 外部詞彙池載入（含 localStorage 緩存，每日檢查更新）
   async function loadExternalKeywords() {
-    const today = new Date().toISOString().split('T')[0];
+    const today = getToday();
     const cached = localStorage.getItem(KEYWORDS_CACHE_KEY);
 
-    // 檢查緩存（當日有效）
+    // 嘗試從外部 URL 載入最新詞彙（每日一次）
+    if (CONFIG.keywordsUrl) {
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 5000);
+
+        const response = await fetch(CONFIG.keywordsUrl, { signal: controller.signal });
+        clearTimeout(timeoutId);
+
+        if (!response.ok) throw new Error('HTTP ' + response.status);
+
+        const data = await response.json();
+        const externalKeywords = Array.isArray(data.keywords) ? data.keywords.filter(k => k && k.trim()) : [];
+        const externalKeywordFix = Array.isArray(data.keywordFix) ? data.keywordFix.filter(f => f && f.trim()) : [];
+        const externalEnWordFix = Array.isArray(data.enWordFix) ? data.enWordFix.filter(f => f && f.trim()) : [];
+
+        // 合併外部詞彙與預設詞彙（去重）
+        keywordsPool = mergeAndDeduplicateKeywords(externalKeywords, CONFIG.defaultKeywordsPool);
+        keywordFixPool = mergeAndDeduplicateFixes(externalKeywordFix, CONFIG.defaultKeywordFixPool);
+        enWordFixPool = mergeAndDeduplicateFixes(externalEnWordFix, CONFIG.defaultEnWordFixPool);
+
+        // 更新 localStorage 緩存（僅儲存外部詞彙）
+        localStorage.setItem(KEYWORDS_CACHE_KEY, JSON.stringify({
+          date: today,
+          version: data.version || null,
+          keywords: externalKeywords,
+          keywordFix: externalKeywordFix,
+          enWordFix: externalEnWordFix,
+          lastFetch: Date.now()
+        }));
+
+        console.log(`[Bing Auto Search] 詞彙庫已更新: ${keywordsPool.length} 組`);
+        return true;
+      } catch (e) {
+        console.log('[Bing Auto Search] 外部詞彙載入失敗，使用快取或預設');
+      }
+    }
+
+    // 若 fetch 失敗，使用 localStorage 快取
     if (cached) {
       try {
         const cacheData = JSON.parse(cached);
-        // 日期相同且有版本號或詞彙池時使用緩存
-        if (cacheData.date === today && (cacheData.version || cacheData.keywords)) {
-          keywordsPool = cacheData.keywords;
-          keywordFixPool = cacheData.keywordFix || keywordFixPool;
-          enWordFixPool = cacheData.enWordFix || enWordFixPool;
+        if (cacheData.date === today && cacheData.keywords) {
+          keywordsPool = mergeAndDeduplicateKeywords(cacheData.keywords, CONFIG.defaultKeywordsPool);
+          keywordFixPool = mergeAndDeduplicateFixes(cacheData.keywordFix, CONFIG.defaultKeywordFixPool);
+          enWordFixPool = mergeAndDeduplicateFixes(cacheData.enWordFix, CONFIG.defaultEnWordFixPool);
+          console.log(`[Bing Auto Search] 使用本地快取: ${keywordsPool.length} 組`);
           return true;
         }
       } catch (e) {
@@ -107,43 +292,12 @@
       }
     }
 
-    if (!CONFIG.keywordsUrl) return false;
-
-    try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 5000);
-
-      const response = await fetch(CONFIG.keywordsUrl, { signal: controller.signal });
-      clearTimeout(timeoutId);
-
-      if (!response.ok) return false;
-
-      const data = await response.json();
-
-      // 支援 JSON 格式：{ keywords: [], keywordFix: [], enWordFix: [], version: "1.0" }
-      if (data.keywords && Array.isArray(data.keywords) && data.keywords.length > 0) {
-        keywordsPool = data.keywords;
-      }
-      if (data.keywordFix && Array.isArray(data.keywordFix) && data.keywordFix.length > 0) {
-        keywordFixPool = data.keywordFix;
-      }
-      if (data.enWordFix && Array.isArray(data.enWordFix) && data.enWordFix.length > 0) {
-        enWordFixPool = data.enWordFix;
-      }
-
-      // 存入 localStorage（當日有效）
-      localStorage.setItem(KEYWORDS_CACHE_KEY, JSON.stringify({
-        date: today,
-        version: data.version || null,
-        keywords: keywordsPool,
-        keywordFix: keywordFixPool,
-        enWordFix: enWordFixPool
-      }));
-
-      return true;
-    } catch (e) {
-      return false;
-    }
+    // 完全無法載入時，使用預設詞彙池
+    keywordsPool = CONFIG.defaultKeywordsPool;
+    keywordFixPool = CONFIG.defaultKeywordFixPool;
+    enWordFixPool = CONFIG.defaultEnWordFixPool;
+    console.log('[Bing Auto Search] 使用預設詞彙池');
+    return false;
   }
 
   // 手動強制重新整理外部詞彙池
@@ -156,8 +310,15 @@
   // 初始化
   // ============================================
   function init() {
-    // 載入外部詞彙池
-    loadExternalKeywords();
+    // 初始化詞綴組合記錄
+    initUsedCombos();
+
+    // 嘗試載入外部詞彙池（非阻塞，若失敗則使用預設）
+    loadExternalKeywords().then(() => {
+      console.log('[Bing Auto Search] 外部詞彙載入完成');
+    }).catch(err => {
+      console.log('[Bing Auto Search] 使用預設詞彙池');
+    });
 
     // 跨天檢查
     checkAndResetDay();
@@ -190,7 +351,7 @@
     // 啟動保活機制
     startKeepAlive();
 
-    // 監聽跨分頁消息
+    // 偵測跨分頁消息
     setupCrossTabListener();
 
     // 頁面載入完成後執行滾動
@@ -230,7 +391,7 @@
       }
     }, 500);
 
-    // 監聽 hashchange 事件
+    // 偵測 hashchange 事件
     window.addEventListener('hashchange', () => {
       setTimeout(() => {
         if (isTaskRunning() && window.location.href.includes('bing.com/search')) {
@@ -239,7 +400,7 @@
       }, 6000);
     });
 
-    // 監聽 popstate 事件
+    // 偵測 popstate 事件
     window.addEventListener('popstate', () => {
       setTimeout(() => {
         if (isTaskRunning() && window.location.href.includes('bing.com/search')) {
@@ -248,7 +409,7 @@
       }, 6000);
     });
 
-    // 監聽 visibilitychange 恢復滾動
+    // 偵測 visibilitychange 恢復滾動
     document.addEventListener('visibilitychange', () => {
       if (!document.hidden && isTaskRunning() && window.location.href.includes('bing.com/search')) {
         doAutoScroll();
@@ -361,22 +522,11 @@
     }
   }
 
-  function checkAutoRunFromBackground() {
-    if (isTaskRunning()) return;
-
-    const shouldAutoRun = GM_getValue(AUTO_RUN_KEY, false);
-    const config = getConfig();
-
-    if (shouldAutoRun && canRunSearch(config)) {
-      startSearch();
-    }
-  }
-
   // ============================================
   // 跨分頁通訊
   // ============================================
   function setupCrossTabListener() {
-    // 監聽 localStorage 變化
+    // 偵測 localStorage 變化
     window.addEventListener('storage', (e) => {
       if (e.key === TRIGGER_KEY && e.newValue) {
         try {
@@ -422,6 +572,12 @@
         autoStart: true
       };
       saveConfig(newConfig);
+
+      // 重置詞綴組合記錄
+      initUsedCombos();
+
+      // 清除當日關鍵詞記錄
+      clearUsedKeywords();
 
       // 如果是休息中狀態，跨天後自動恢復為進行中
       if (taskStatus === STATUS_RESTING) {
@@ -1014,43 +1170,96 @@
   }
 
   function checkLoginStatus() {
-    const signInElement = document.querySelector('span.sw_spd.id_avatar#id_a[aria-label="Sign in"]');
-    if (signInElement) {
-      const computedStyle = window.getComputedStyle(signInElement);
-      if (computedStyle.display === 'none' || computedStyle.visibility === 'hidden') return true;
-      alert('請登入 Bing 以繼續任務');
-      if (isTaskRunning()) toggleScript();
-      return false;
+    // 檢查 Bing 登入狀態（多個可能的选择器）
+    const signInSelectors = [
+      'span.sw_spd.id_avatar#id_a[aria-label="Sign in"]',
+      '#id_a[aria-label*="Sign"]',
+      'a[href*="signin"]',
+      '.useravatar'
+    ];
+
+    for (const selector of signInSelectors) {
+      const signInElement = document.querySelector(selector);
+      if (signInElement) {
+        const computedStyle = window.getComputedStyle(signInElement);
+        // 檢查是否可見（未被隱藏）
+        const isVisible = computedStyle.display !== 'none' && computedStyle.visibility !== 'hidden';
+        if (isVisible) {
+          alert('請登入 Bing 以繼續任務');
+          if (isTaskRunning()) toggleScript();
+          return false;
+        }
+      }
     }
     return true;
   }
 
   async function getRandomKeyword() {
-    lastKeywordFromPool = !lastKeywordFromPool;
-    if (lastKeywordFromPool) return getRandomKeywordFromPool();
-    else return await getEnWordKeyword();
+    const { chinese, english } = CONFIG.sourceWeight;
+    const roll = Math.random() * 100;
+
+    if (roll < chinese) {
+      return getRandomKeywordFromPool();
+    } else {
+      return await getEnWordKeyword();
+    }
   }
 
   function getRandomKeywordFromPool() {
-    const baseKeyword = keywordsPool[Math.floor(Math.random() * keywordsPool.length)];
+    const { none, prefix, suffix } = CONFIG.fixWeight;
 
-    // 隨機決定加入 keywordFixPool 的位置（前/後/不加）
-    const positionRoll = Math.random();
-    if (positionRoll < 0.4) {
-      // 40% 機率在前面加入 keywordFixPool
-      const fix = keywordFixPool[Math.floor(Math.random() * keywordFixPool.length)];
-      return `${fix} ${baseKeyword}`;
-    } else if (positionRoll < 0.8) {
-      // 40% 機率在後面加入 keywordFixPool
-      const fix = keywordFixPool[Math.floor(Math.random() * keywordFixPool.length)];
-      return `${baseKeyword} ${fix}`;
+    // 嘗試生成不重複的詞綴組合（最多嘗試 10 次）
+    for (let attempt = 0; attempt < 10; attempt++) {
+      const baseKeyword = getUniqueKeywordFromPool();
+      const positionRoll = Math.random() * 100;
+      let selectedFix = null;
+      let fixType = 'none';
+
+      if (positionRoll < prefix) {
+        // 加前綴
+        selectedFix = keywordFixPool[Math.floor(Math.random() * keywordFixPool.length)];
+        fixType = 'prefix';
+      } else if (positionRoll < prefix + suffix) {
+        // 加後綴
+        selectedFix = keywordFixPool[Math.floor(Math.random() * keywordFixPool.length)];
+        fixType = 'suffix';
+      }
+      // none: 不加詞綴
+
+      // 檢查組合是否已使用
+      const keyPrefix = fixType === 'prefix' ? selectedFix : null;
+      const keySuffix = fixType === 'suffix' ? selectedFix : null;
+      if (!isComboUsed(keyPrefix, keySuffix, baseKeyword)) {
+        // 標記為已使用
+        markComboUsed(keyPrefix, keySuffix, baseKeyword);
+        let result;
+        if (fixType === 'prefix') result = `${selectedFix} ${baseKeyword}`;
+        else if (fixType === 'suffix') result = `${baseKeyword} ${selectedFix}`;
+        else result = baseKeyword;
+        return removeDuplicateWords(result);
+      }
     }
-    // 20% 機率不加
 
-    return baseKeyword;
+    // 所有組合都已使用，重置並返回隨機結果
+    resetComboTracking();
+    const baseKeyword = getUniqueKeywordFromPool();
+    const roll = Math.random() * 100;
+    let result;
+    if (roll < prefix) {
+      const fix = keywordFixPool[Math.floor(Math.random() * keywordFixPool.length)];
+      result = `${fix} ${baseKeyword}`;
+    } else if (roll < prefix + suffix) {
+      const fix = keywordFixPool[Math.floor(Math.random() * keywordFixPool.length)];
+      result = `${baseKeyword} ${fix}`;
+    } else {
+      result = baseKeyword;
+    }
+    return removeDuplicateWords(result);
   }
 
   async function getEnWordKeyword() {
+    const { none, prefix, suffix, both } = CONFIG.enFixWeight;
+
     try {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 5000); // 5秒超時
@@ -1076,27 +1285,28 @@
           const selectedWords = shuffled.slice(0, wordCount);
           let enWord = selectedWords.join(' ');
 
-          // 隨機決定加入 enWordFixPool 的位置（前或後，或兩者）
-          const positionRoll = Math.random();
-          if (positionRoll < 0.25) {
+          // 根據權重配置決定詞綴組合
+          const positionRoll = Math.random() * 100;
+          if (positionRoll < none) {
+            // 不加詞綴
+          } else if (positionRoll < none + prefix) {
             // 只在前面加
-            const prefix = enWordFixPool[Math.floor(Math.random() * enWordFixPool.length)];
-            enWord = `${prefix} ${enWord}`;
-          } else if (positionRoll < 0.5) {
+            const p = enWordFixPool[Math.floor(Math.random() * enWordFixPool.length)];
+            enWord = `${p} ${enWord}`;
+          } else if (positionRoll < none + prefix + suffix) {
             // 只在後面加
-            const fix = enWordFixPool[Math.floor(Math.random() * enWordFixPool.length)];
-            enWord = `${enWord} ${fix}`;
-          } else if (positionRoll < 0.75) {
+            const f = enWordFixPool[Math.floor(Math.random() * enWordFixPool.length)];
+            enWord = `${enWord} ${f}`;
+          } else {
             // 兩邊都加（確保前綴和後綴不同）
             const prefixPool = enWordFixPool.filter(f => f !== enWord.split(' ')[0]);
             const fixPool = enWordFixPool.filter(f => f !== enWord.split(' ').slice(-1)[0]);
-            const prefix = prefixPool[Math.floor(Math.random() * prefixPool.length)] || enWordFixPool[Math.floor(Math.random() * enWordFixPool.length)];
-            const fix = fixPool[Math.floor(Math.random() * fixPool.length)] || enWordFixPool[Math.floor(Math.random() * enWordFixPool.length)];
-            enWord = `${prefix} ${enWord} ${fix}`;
+            const p = prefixPool[Math.floor(Math.random() * prefixPool.length)] || enWordFixPool[Math.floor(Math.random() * enWordFixPool.length)];
+            const f = fixPool[Math.floor(Math.random() * fixPool.length)] || enWordFixPool[Math.floor(Math.random() * enWordFixPool.length)];
+            enWord = `${p} ${enWord} ${f}`;
           }
-          // 25% 機率不加任何前綴/後綴
 
-          return enWord;
+          return removeDuplicateWords(enWord);
         }
       }
     } catch (e) { /* 忽略錯誤 */ }
@@ -1107,7 +1317,7 @@
   if (window.location.href.includes('bing.com/search') || window.location.href.includes('bing.com/')) {
     init();
 
-    // 監聽 URL 變化（處理 SPA 頁面跳轉）
+    // 偵測 URL 變化（處理 SPA 頁面跳轉）
     let lastUrl = window.location.href;
     const urlObserver = new MutationObserver(() => {
       if (window.location.href !== lastUrl) {
@@ -1124,7 +1334,7 @@
     });
     urlObserver.observe(document.body, { childList: true, subtree: true });
 
-    // 同時監聽 popstate 事件（瀏覽器導航）
+    // 同時偵測 popstate 事件（瀏覽器導航）
     window.addEventListener('popstate', () => {
       setTimeout(() => {
         if (isTaskRunning() && window.location.href.includes('bing.com/search')) {
