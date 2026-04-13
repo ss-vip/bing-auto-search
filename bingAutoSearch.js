@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         Bing Auto Search
-// @version      2026041004
+// @version      2026041301
 // @description  無人值守 Bing 自動隨機搜尋
 // @author       Hank
 // @match        https://*.bing.com/*
@@ -24,7 +24,7 @@
     min_interval: 50, // 最小隨機秒數
     max_interval: 120, // 最大隨機秒數
     keywordsUrl: 'https://raw.githubusercontent.com/ss-vip/bing-auto-search/refs/heads/main/example.json', // 外部詞彙池 URL（JSON 格式）
-    googleTrends: 'https://trends.google.com/trending/rss?geo=TW', // Google Trends RSS 台灣
+    bingNewsUrl: 'https://www.bing.com/news/search?q=%e7%86%b1%e9%96%80%e5%a0%b1%e5%b0%8e&nvaug=%5bNewsVertical+Category%3d%22rt_MaxClass%22%5d', // Bing 熱門新聞
 
     // 詞綴權重配置（數值為百分比，0-100）
     fixWeight: {
@@ -103,7 +103,7 @@
   let keywordsPool = CONFIG.defaultKeywordsPool;
   let keywordFixPool = CONFIG.defaultKeywordFixPool;
   let enWordFixPool = CONFIG.defaultEnWordFixPool;
-  let panelKeywords = []; // 從 Bing Rewards 面板取得的關鍵字（優先使用）
+  let bingNewsKeywords = []; // 從 Bing News 熱門新聞取得的關鍵字（優先使用）
 
   // 詞綴組合記錄（用於去重）
   let usedPrefixSuffixCombos = new Set();
@@ -410,42 +410,74 @@
     return false;
   }
 
-  // 從 Google Trends RSS 取得熱門搜尋關鍵字（優先使用）
+  // 從 Bing News 取得熱門搜尋關鍵字（優先使用）
   async function loadPanelKeywords() {
-    if (!CONFIG.googleTrends) return;
+    if (!CONFIG.bingNewsUrl) return;
 
     try {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 5000);
 
-      const response = await fetch(CONFIG.googleTrends, {
+      const response = await fetch(CONFIG.bingNewsUrl, {
         signal: controller.signal
       });
       clearTimeout(timeoutId);
 
       if (!response.ok) throw new Error('HTTP ' + response.status);
 
-      const xmlText = await response.text();
+      const htmlText = await response.text();
 
-      // 解析 XML 並提取 title 標籤的值
+      // 解析 HTML 並提取新聞標題
       const parser = new DOMParser();
-      const doc = parser.parseFromString(xmlText, 'text/xml');
-      const items = doc.querySelectorAll('item title');
+      const doc = parser.parseFromString(htmlText, 'text/html');
 
       const titles = [];
+
+      // 方法1: 嘗試原始選擇器 class="na_t news_title" 的 title 屬性
+      let items = doc.querySelectorAll('.na_t.news_title');
       items.forEach(item => {
-        const title = item.textContent?.trim();
-        if (title && title.length > 0 && title !== 'Daily Search Trends') {
+        const title = item.getAttribute('title')?.trim();
+        if (title && title.length > 0) {
           titles.push(title);
         }
       });
 
-      if (titles.length > 0) {
-        panelKeywords = titles;
-        console.log(`[Bing Auto Search] 從 Google Trends 取得 ${titles.length} 組關鍵字: ${titles.join(', ')}`);
+      // 方法2: 如果方法1沒找到，嘗試從常見的新聞標題元素提取
+      if (titles.length === 0) {
+        // 嘗試從 b_algo 元素提取
+        const bAlgoItems = doc.querySelectorAll('.b_algo a, .b_ans a');
+        bAlgoItems.forEach(item => {
+          const text = item.textContent?.trim();
+          // 過濾掉時間標記、來源名稱等
+          if (text && text.length > 4 && text.length < 80 &&
+              !text.match(/^\d+\s*(小時|天|分鐘|小時前)$/) &&
+              !text.includes('·') &&
+              !text.match(/[A-Z][a-z]+\s+[A-Z][a-z]+/)) {
+            titles.push(text);
+          }
+        });
+      }
+
+      // 方法3: 從 meta 標籤或標題標籤提取
+      if (titles.length === 0) {
+        const h2Elements = doc.querySelectorAll('h2, h3');
+        h2Elements.forEach(el => {
+          const text = el.textContent?.trim();
+          if (text && text.length > 4 && text.length < 80 && !text.includes('熱門報導')) {
+            titles.push(text);
+          }
+        });
+      }
+
+      // 去重並限制數量
+      const uniqueTitles = [...new Set(titles)].slice(0, 30);
+
+      if (uniqueTitles.length > 0) {
+        bingNewsKeywords = uniqueTitles;
+        console.log(`[Bing Auto Search] 從 Bing News 取得 ${uniqueTitles.length} 組關鍵字: ${uniqueTitles.join(', ')}`);
       }
     } catch (e) {
-      console.log('[Bing Auto Search] Google Trends 關鍵字載入失敗', e.message);
+      console.log('[Bing Auto Search] Bing News 關鍵字載入失敗', e.message);
     }
   }
 
@@ -477,9 +509,9 @@
         console.log('[Bing Auto Search] 使用預設詞彙池');
       });
 
-      // 嘗試從 Bing Rewards 面板載入熱門搜尋關鍵字（優先使用）
+      // 嘗試從 Bing News 載入熱門搜尋關鍵字（優先使用）
       loadPanelKeywords().catch(err => {
-        console.log('[Bing Auto Search] Rewards 面板關鍵字載入失敗');
+        console.log('[Bing Auto Search] Bing News 關鍵字載入失敗');
       });
     }
 
@@ -893,7 +925,7 @@
           <button id="br_reset_btn" class="br_btn br_btn_reset" style="margin-top:10px;">↺ 重置今日計數</button>
           <div class="br_history-accordion">
             <div class="br_history-header" id="br_history_header">
-              <span>📜 歷史搜尋記錄</span>
+              <span>📜 最近搜尋記錄</span>
               <span class="br_history-arrow">▼</span>
             </div>
             <div class="br_history-content" id="br_history_content">
@@ -1470,10 +1502,10 @@
   }
 
   async function getRandomKeyword() {
-    // 優先使用 Rewards 面板關鍵字
-    if (panelKeywords.length > 0) {
-      // 嘗試找到未使用過的 panel keyword
-      const available = panelKeywords.filter(k => !usedKeywordsToday.has(k));
+    // 優先使用 Bing News 關鍵字
+    if (bingNewsKeywords.length > 0) {
+      // 嘗試找到未使用過的 keyword
+      const available = bingNewsKeywords.filter(k => !usedKeywordsToday.has(k));
       if (available.length > 0) {
         const keyword = available[Math.floor(Math.random() * available.length)];
         usedKeywordsToday.add(keyword);
@@ -1483,9 +1515,9 @@
         }
         return keyword;
       } else {
-        // panel keywords 用完了，從頭重置
+        // Bing News keywords 用完了，從頭重置
         usedKeywordsToday.clear();
-        const keyword = panelKeywords[Math.floor(Math.random() * panelKeywords.length)];
+        const keyword = bingNewsKeywords[Math.floor(Math.random() * bingNewsKeywords.length)];
         usedKeywordsToday.add(keyword);
         return keyword;
       }
