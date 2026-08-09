@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         Bing Auto Search
-// @version      2026041301
+// @version      2026080901
 // @description  無人值守 Bing 自動隨機搜尋
 // @author       Hank
 // @match        https://*.bing.com/*
@@ -69,10 +69,11 @@
     CONFIG.min_interval = minInt;
     CONFIG.max_interval = maxInt;
 
-    // 驗證詞綴權重（確保總和為 100%）
+    // 驗證詞綴權重（確保總和為 100% 且無負值）
     const totalWeight = (cfg) => (cfg.none || 0) + (cfg.prefix || 0) + (cfg.suffix || 0) + (cfg.both || 0);
+    const hasInvalidWeight = (cfg) => Object.values(cfg).some(v => v < 0);
 
-    if (totalWeight(CONFIG.fixWeight) !== 100) {
+    if (totalWeight(CONFIG.fixWeight) !== 100 || hasInvalidWeight(CONFIG.fixWeight)) {
       const w = CONFIG.fixWeight;
       const none = Math.max(0, Math.min(100, w.none || 20));
       const prefix = Math.max(0, Math.min(100, w.prefix || 40));
@@ -80,7 +81,7 @@
       CONFIG.fixWeight = { none, prefix, suffix: Math.max(0, suffix) };
     }
 
-    if (totalWeight(CONFIG.enFixWeight) !== 100) {
+    if (totalWeight(CONFIG.enFixWeight) !== 100 || hasInvalidWeight(CONFIG.enFixWeight)) {
       const w = CONFIG.enFixWeight;
       const none = Math.max(0, Math.min(100, w.none || 25));
       const prefix = Math.max(0, Math.min(100, w.prefix || 25));
@@ -211,17 +212,6 @@
     return fixes.filter(fix => !baseWords.has(fix));
   }
 
-  // 檢查最終關鍵詞是否包含非連續重複
-  function hasNonContiguousDuplicates(keyword) {
-    const words = keyword.split(/\s+/);
-    const seen = new Set();
-    for (const word of words) {
-      if (seen.has(word)) return true;
-      seen.add(word);
-    }
-    return false;
-  }
-
   const STORAGE_KEY = 'bingAutoSearch';
   const JOKE_API_URL = 'https://v2.jokeapi.dev/joke/Any?blacklistFlags=nsfw,religious,political,racist,sexist,explicit&type=single';
   const KEYWORDS_CACHE_KEY = 'bing_keywords_cache';
@@ -305,9 +295,7 @@
   let isDragging = false;
   let dragX = 0, dragY = 0;
   let checkInterval = null;
-  let currentKeyword = '';
   let nextExecuteTime = 0;  // 下次執行時間戳
-  let isBackground = false;
   let scrollInterval = null;  // 滾動間隔計時器
   let scrollTimeout = null;  // 滾動超時計時器
 
@@ -591,11 +579,9 @@
   // 處理頁面可見性變化
   function handleVisibilityChange() {
     if (document.hidden) {
-      // 頁面進入背景，記錄當前狀態
-      isBackground = true;
+      // 頁面進入背景
     } else {
       // 頁面回到前景，檢查是否需要執行搜尋
-      isBackground = false;
       checkScheduledExecution();
       // 恢復滾動（若正在搜尋頁）
       if (isTaskRunning() && window.location.href.includes('bing.com/search')) {
@@ -1022,6 +1008,7 @@
   // 停止計時鏈
   function stopTimer() {
     timerActive = false;
+    lastSecondUpdate = 0;  // 重置，避免重啟後剩餘秒數相同導致 UI 不刷新
     if (timerHandle) {
       clearTimeout(timerHandle);
       timerHandle = null;
@@ -1121,7 +1108,6 @@
           getRandomKeyword().then(tryNext);
           return;
         }
-        currentKeyword = kw;
         addUsedFullKeyword(kw);
         executeSearch(kw);
       };
@@ -1365,12 +1351,13 @@
   }
 
   function checkLoginStatus() {
-    // 檢查 Bing 登入狀態（多個可能的選擇器）
+    // 檢查 Bing 登入狀態（多個可能的選擇器，含繁中「登入」與英文 "Sign in" 語境）
     const signInSelectors = [
+      '#id_a[aria-label="登入"]',           // 繁體中文版
+      'input[type="submit"][value="登入"]', // 台灣版登入按鈕備援
+      '#id_a[aria-label*="Sign"]',          // 英文版
       'span.sw_spd.id_avatar#id_a[aria-label="Sign in"]',
-      '#id_a[aria-label*="Sign"]',
-      'a[href*="signin"]',
-      '.useravatar'
+      'a[href*="signin"]'
     ];
 
     for (const selector of signInSelectors) {
@@ -1465,9 +1452,6 @@
         // 移除最終關鍵詞中的重複詞彙
         result = removeDuplicateWords(result);
 
-        // 如果仍有非連續重複，嘗試重新生成
-        if (hasNonContiguousDuplicates(result)) continue;
-
         return result;
       }
     }
@@ -1550,11 +1534,11 @@
               // 兩邊都加（確保前綴和後綴不同，且不與基礎單字重複）
               const baseLower = baseWord.toLowerCase();
               const prefixPool = enWordFixPool.filter(f => !baseLower.includes(f.toLowerCase()));
-              const suffixPool = enWordFixPool.filter(f => !baseLower.includes(f.toLowerCase()) && f !== (prefixPool[0] || ''));
-
-              if (prefixPool.length === 0 || suffixPool.length === 0) continue;
+              // 至少需要 2 個詞綴才能前後不同
+              if (prefixPool.length < 2) continue;
 
               const p = prefixPool[Math.floor(Math.random() * prefixPool.length)];
+              const suffixPool = prefixPool.filter(f => f !== p);
               const f = suffixPool[Math.floor(Math.random() * suffixPool.length)];
               tempEnWord = `${p} ${baseWord} ${f}`;
             }
@@ -1562,9 +1546,6 @@
 
             // 移除最終關鍵詞中的重複詞彙
             enWord = removeDuplicateWords(tempEnWord);
-
-            // 如果仍有非連續重複，嘗試重新生成
-            if (hasNonContiguousDuplicates(enWord)) continue;
 
             return enWord;
           }
