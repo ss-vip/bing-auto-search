@@ -1,0 +1,30 @@
+name: Update Keywords
+
+on:
+  schedule:
+    - cron: '10 0 * * *'   # 每天 UTC 00:10（台北 08:10）
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: 抓取 DIGITIMES RSS 並更新 example.json
+        run: node scripts/update-keywords.js
+
+      - name: 提交變更
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add example.json
+          git diff --cached --quiet || git commit -m "Update: 每日自動更新關鍵字"
+          git push

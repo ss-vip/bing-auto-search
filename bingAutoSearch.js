@@ -7,7 +7,6 @@
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=bing.com
 // @grant        GM_setValue
 // @grant        GM_getValue
-// @grant        GM_addValueChangeListener
 // @grant        GM_addStyle
 // @run-at       document-end
 // @license      GPL-3.0
@@ -125,9 +124,9 @@
     return [...new Set([...defaultFixes, ...externalFixes])].filter(f => f && f.trim().length > 0);
   }
 
-  // 初始化詞綴組合記錄
-  function initUsedCombos() {
-    usedPrefixSuffixCombos = new Set();
+  // 重置詞綴組合記錄（跨天或全部用完時）
+  function resetComboTracking() {
+    usedPrefixSuffixCombos.clear();
   }
 
   // 生成唯一詞綴組合鍵值
@@ -143,11 +142,6 @@
   // 標記詞綴組合已使用
   function markComboUsed(prefix, suffix, baseKeyword) {
     usedPrefixSuffixCombos.add(getComboKey(prefix, suffix, baseKeyword));
-  }
-
-  // 重置詞綴組合記錄（在跨天時）
-  function resetComboTracking() {
-    usedPrefixSuffixCombos.clear();
   }
 
   // 從詞庫中取得未重複的關鍵詞
@@ -229,10 +223,7 @@
   }
 
   const STORAGE_KEY = 'bingAutoSearch';
-  const AUTO_RUN_KEY = 'bing_auto_run';
   const JOKE_API_URL = 'https://v2.jokeapi.dev/joke/Any?blacklistFlags=nsfw,religious,political,racist,sexist,explicit&type=single';
-  const TRIGGER_KEY = 'bing_auto_trigger';
-  const HEARTBEAT_KEY = 'bing_auto_heartbeat';
   const KEYWORDS_CACHE_KEY = 'bing_keywords_cache';
   const TASK_STATUS_KEY = 'bing_task_status';  // sessionStorage key for per-tab status
   const SEARCH_HISTORY_KEY = 'bing_search_history';  // 歷史搜尋記錄 key
@@ -308,10 +299,12 @@
   let taskStatus = STATUS_PAUSED;  // 當前任務狀態（每個分頁獨立）
   let timerStart = 0;
   let timerInterval = 0;
+  let timerActive = false;  // 是否有活動的計時鏈（防止 startSearchLoop 重複啟動）
+  let timerHandle = null;  // 計時 setTimeout handle
+  let lastSearchTime = 0;  // 上次執行搜尋時間戳（防止雙重觸發）
   let isDragging = false;
   let dragX = 0, dragY = 0;
   let checkInterval = null;
-  let heartbeatInterval = null;
   let currentKeyword = '';
   let nextExecuteTime = 0;  // 下次執行時間戳
   let isBackground = false;
@@ -346,7 +339,22 @@
     }
 
     const today = getToday();
-    const cached = localStorage.getItem(KEYWORDS_CACHE_KEY);
+    let cacheData = null;
+    try {
+      const cached = localStorage.getItem(KEYWORDS_CACHE_KEY);
+      if (cached) cacheData = JSON.parse(cached);
+    } catch (e) {
+      localStorage.removeItem(KEYWORDS_CACHE_KEY);
+    }
+
+    // 當天已載入過，直接使用快取（避免每次開分頁都重新 fetch）
+    if (cacheData && cacheData.date === today) {
+      keywordsPool = mergeAndDeduplicateKeywords(cacheData.keywords || [], CONFIG.defaultKeywordsPool);
+      keywordFixPool = mergeAndDeduplicateFixes(cacheData.keywordFix || [], CONFIG.defaultKeywordFixPool);
+      enWordFixPool = mergeAndDeduplicateFixes(cacheData.enWordFix || [], CONFIG.defaultEnWordFixPool);
+      console.log(`[Bing Auto Search] 使用本地快取: ${keywordsPool.length} 組`);
+      return true;
+    }
 
     // 嘗試從外部 URL 載入最新詞彙（每日一次）
     if (CONFIG.keywordsUrl) {
@@ -386,20 +394,13 @@
       }
     }
 
-    // 若 fetch 失敗，使用 localStorage 快取
-    if (cached) {
-      try {
-        const cacheData = JSON.parse(cached);
-        if (cacheData.date === today && cacheData.keywords) {
-          keywordsPool = mergeAndDeduplicateKeywords(cacheData.keywords, CONFIG.defaultKeywordsPool);
-          keywordFixPool = mergeAndDeduplicateFixes(cacheData.keywordFix, CONFIG.defaultKeywordFixPool);
-          enWordFixPool = mergeAndDeduplicateFixes(cacheData.enWordFix, CONFIG.defaultEnWordFixPool);
-          console.log(`[Bing Auto Search] 使用本地快取: ${keywordsPool.length} 組`);
-          return true;
-        }
-      } catch (e) {
-        localStorage.removeItem(KEYWORDS_CACHE_KEY);
-      }
+    // 若 fetch 失敗，使用舊快取（不限當天）
+    if (cacheData && (cacheData.keywords || cacheData.keywordFix || cacheData.enWordFix)) {
+      keywordsPool = mergeAndDeduplicateKeywords(cacheData.keywords || [], CONFIG.defaultKeywordsPool);
+      keywordFixPool = mergeAndDeduplicateFixes(cacheData.keywordFix || [], CONFIG.defaultKeywordFixPool);
+      enWordFixPool = mergeAndDeduplicateFixes(cacheData.enWordFix || [], CONFIG.defaultEnWordFixPool);
+      console.log(`[Bing Auto Search] 使用本地快取: ${keywordsPool.length} 組`);
+      return true;
     }
 
     // 完全無法載入時，使用預設詞彙池
@@ -481,27 +482,22 @@
     }
   }
 
-  // 手動強制重新整理外部詞彙池
-  function refreshExternalKeywords() {
-    localStorage.removeItem(KEYWORDS_CACHE_KEY);
-    return loadExternalKeywords();
-  }
-
   // ============================================
   // 初始化
   // ============================================
   function init() {
     // 先檢查登入狀態，若未登入則不執行任務
-    if (!checkLoginStatus()) {
+    const loggedIn = checkLoginStatus();
+    if (!loggedIn) {
       console.log('[Bing Auto Search] 未偵測到登入狀態，任務暫停');
       setTabTaskStatus(STATUS_PAUSED);
     }
 
-    // 初始化詞綴組合記錄
-    initUsedCombos();
+    // 重置詞綴組合記錄
+    resetComboTracking();
 
     // 只有在已登入狀態才嘗試載入外部詞彙池
-    if (checkLoginStatus()) {
+    if (loggedIn) {
       // 嘗試載入外部詞彙池（非阻塞，若失敗則使用預設）
       loadExternalKeywords().then(() => {
         console.log('[Bing Auto Search] 外部詞彙載入完成');
@@ -517,9 +513,6 @@
 
     // 跨天檢查
     checkAndResetDay();
-
-    // 嘗試恢復排程狀態
-    restoreScheduleState();
 
     // 優先從 sessionStorage 恢復當前分頁的任務狀態
     const savedStatus = getTabTaskStatus();
@@ -546,9 +539,6 @@
     // 啟動保活機制
     startKeepAlive();
 
-    // 偵測跨分頁消息
-    setupCrossTabListener();
-
     // 設置跨天喚醒監聽
     setupCrossDayListener();
 
@@ -569,68 +559,14 @@
       });
     }
 
-    // 持續監測 URL 變化
-    let lastUrl = window.location.href;
+    // 定時更新狀態徽章（URL 變化監測已由底部 MutationObserver 處理）
     let lastTaskStatus = taskStatus;
     setInterval(() => {
-      const currentUrl = window.location.href;
-      if (currentUrl !== lastUrl) {
-        lastUrl = currentUrl;
-        setTimeout(() => {
-          if (isTaskRunning() && window.location.href.includes('bing.com/search')) {
-            doAutoScroll();
-          }
-        }, 6000);
-      }
-      // 只在 taskStatus 狀態改變時更新 UI
       if (lastTaskStatus !== taskStatus) {
         lastTaskStatus = taskStatus;
         updateStatusBadge(taskStatus);
       }
     }, 500);
-
-    // 偵測 hashchange 事件
-    window.addEventListener('hashchange', () => {
-      setTimeout(() => {
-        if (isTaskRunning() && window.location.href.includes('bing.com/search')) {
-          doAutoScroll();
-        }
-      }, 6000);
-    });
-
-    // 偵測 popstate 事件
-    window.addEventListener('popstate', () => {
-      setTimeout(() => {
-        if (isTaskRunning() && window.location.href.includes('bing.com/search')) {
-          doAutoScroll();
-        }
-      }, 6000);
-    });
-
-    // 偵測 visibilitychange 恢復滾動
-    document.addEventListener('visibilitychange', () => {
-      if (!document.hidden && isTaskRunning() && window.location.href.includes('bing.com/search')) {
-        doAutoScroll();
-      }
-    });
-  }
-
-  // 恢復排程狀態
-  function restoreScheduleState() {
-    try {
-      const saved = localStorage.getItem('bing_auto_schedule');
-      if (saved) {
-        const data = JSON.parse(saved);
-        const now = Date.now();
-
-        // 如果有排程時間且未過期
-        if (data.time > 0 && (now - data.timestamp) < 3600000) {
-          nextExecuteTime = data.time;
-          timerInterval = data.time - now;
-          timerStart = performance.now() - (data.time - data.timestamp);
-        }
-      }
-    } catch (e) { /* 忽略錯誤 */ }
   }
 
   // ============================================
@@ -650,20 +586,6 @@
       checkScheduledExecution();
       updateUI();
     }, 10000);
-
-    // 發送心跳到其他分頁（只共享計數器資訊，不共享任務狀態）
-    if (heartbeatInterval) clearInterval(heartbeatInterval);
-    heartbeatInterval = setInterval(() => {
-      try {
-        const config = getConfig();
-        localStorage.setItem(HEARTBEAT_KEY, JSON.stringify({
-          timestamp: Date.now(),
-          nextExecuteTime: nextExecuteTime,
-          pc_count: config.pc_count,
-          ph_count: config.ph_count
-        }));
-      } catch (e) { /* 忽略錯誤 */ }
-    }, 30000);
   }
 
   // 處理頁面可見性變化
@@ -675,6 +597,10 @@
       // 頁面回到前景，檢查是否需要執行搜尋
       isBackground = false;
       checkScheduledExecution();
+      // 恢復滾動（若正在搜尋頁）
+      if (isTaskRunning() && window.location.href.includes('bing.com/search')) {
+        doAutoScroll();
+      }
     }
   }
 
@@ -707,49 +633,17 @@
       return;
     }
 
-    // 如果沒有排程，但正在運行中，重新計算下次執行時間
-    if (isTaskRunning() && scheduledTime === 0) {
-      // 從計時器狀態計算剩餘時間
-      const elapsed = performance.now() - timerStart;
-      const remaining = timerInterval - elapsed;
+        // 如果沒有排程，但正在運行中，重新計算下次執行時間
+        if (isTaskRunning() && scheduledTime === 0) {
+          // 從計時器狀態計算剩餘時間（與 timerLoop 相同使用 Date.now() 基準）
+          const elapsed = Date.now() - timerStart;
+          const remaining = timerInterval - elapsed;
 
-      if (remaining > 0) {
-        nextExecuteTime = now + remaining;
-        saveScheduleTime(nextExecuteTime);
-      }
-    }
-  }
-
-  // ============================================
-  // 跨分頁通訊
-  // ============================================
-  function setupCrossTabListener() {
-    // 偵測 localStorage 變化
-    window.addEventListener('storage', (e) => {
-      if (e.key === TRIGGER_KEY && e.newValue) {
-        try {
-          const data = JSON.parse(e.newValue);
-          if (data.action === 'EXECUTE_SEARCH') {
-            setTimeout(() => executeSearch(data.keyword || currentKeyword), 1000);
+          if (remaining > 0) {
+            nextExecuteTime = now + remaining;
+            saveScheduleTime(nextExecuteTime);
           }
-        } catch (err) {}
-      }
-    });
-
-    // GM_addValueChangeListener
-    if (typeof GM_addValueChangeListener !== 'undefined') {
-      GM_addValueChangeListener(TRIGGER_KEY, (key, oldValue, newValue, remote) => {
-        if (newValue && newValue !== oldValue) {
-          try {
-            const data = JSON.parse(newValue);
-            if (data.action === 'EXECUTE_SEARCH') {
-              // 收到 GM 搜尋訊號
-              setTimeout(() => executeSearch(data.keyword || currentKeyword), 1000);
-            }
-          } catch (err) {}
         }
-      });
-    }
   }
 
   // ============================================
@@ -759,7 +653,6 @@
     const stored = getStorageData();
     const today = getToday();
 
-    // 檢查是否需要跨天重置（使用日期比對，確保背景頁也能觸發）
     if (stored && stored.lastDate !== today) {
       // 檢查跨天標記，避免重複觸發
       const crossdayMark = localStorage.getItem(CROSSDAY_CHECK_KEY);
@@ -781,7 +674,7 @@
       saveConfig(newConfig);
 
       // 重置詞綴組合記錄
-      initUsedCombos();
+      resetComboTracking();
 
       // 清除當日關鍵詞記錄
       clearUsedKeywords();
@@ -794,9 +687,6 @@
         doAutoScroll();     // 恢復滾動
       }
 
-      // 設置自動運行
-      GM_setValue(AUTO_RUN_KEY, true);
-
       // 設置跨天標記（當天只觸發一次）
       localStorage.setItem(CROSSDAY_CHECK_KEY, today);
 
@@ -806,18 +696,9 @@
       updateUI();
       updateStatus("跨天重置成功! 任務進行中...", "#e67e22");
       console.log('[Bing Auto Search] 跨天重置完成');
-    } else if (!stored || stored.lastDate !== today) {
-      // 沒有 stored 資料或日期不同，設置跨天標記
+    } else if (!stored) {
+      // 首次使用，設置跨天標記
       localStorage.setItem(CROSSDAY_CHECK_KEY, today);
-    }
-
-    // 凌晨自動開始任務（0-2點）
-    const hour = new Date().getHours();
-    if (hour >= 0 && hour < 2) {
-      const config = getConfig();
-      if (config.pc_count === 0 && config.ph_count === 0) {
-        GM_setValue(AUTO_RUN_KEY, true);
-      }
     }
   }
 
@@ -882,13 +763,12 @@
       #br_reward_tool.br_minimized .br_header, #br_reward_tool.br_minimized .br_panel-content { display: none !important; }
       #br_reward_tool .br_mini-icon { width: 50px; height: 50px; border-radius: 50%; background: #0078d4; display: flex; align-items: center; justify-content: center; color: #fff; font-size: 12px; cursor: pointer; box-shadow: 0 4px 12px rgba(0,0,0,0.3); font-weight: bold; border: 2px solid #fff; text-align: center; line-height: 1.2; }
       #br_reward_tool .br_mini-icon:hover { transform: scale(1.05); background: #005bb5; }
-      #br_reward_tool .br_mini-icon.running { animation: breathe 2s ease-in-out infinite; }
+      #br_reward_tool .br_mini-icon.running { background: #d63031; animation: breathe 2s ease-in-out infinite; }
       @keyframes breathe { 0% { opacity: 1; box-shadow: 0 0 8px rgba(214, 48, 49, 0.5); } 50% { opacity: 0.6; box-shadow: 0 0 16px rgba(214, 48, 49, 0.8); } 100% { opacity: 1; box-shadow: 0 0 8px rgba(214, 48, 49, 0.5); } }
       #br_reward_tool .br_auto-badge { display: inline-block; background: #27ae60; color: #fff; font-size: 10px; padding: 2px 6px; border-radius: 3px; margin-left: 6px; vertical-align: middle; }
       #br_reward_tool .br_live-indicator { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #27ae60; margin-right: 6px; animation: pulse 1.5s infinite; }
       @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.5; } 100% { opacity: 1; } }
       #br_reward_tool .br_mini-icon.paused { background: #0078d4; }
-      #br_reward_tool .br_mini-icon.running { background: #d63031; animation: breathe 2s ease-in-out infinite; }
       #br_reward_tool .br_mini-icon.resting { background: #27ae60; }
       #br_reward_tool .br_status-badge { display: inline-block; font-size: 10px; padding: 2px 6px; border-radius: 3px; margin-left: 6px; vertical-align: middle; }
       #br_reward_tool .br_status-badge.paused { background: #666; color: #fff; }
@@ -942,7 +822,7 @@
     if (document.body) {
       document.body.insertAdjacentHTML('beforeend', toolHtml);
     } else {
-      window.onload = function () { document.body.insertAdjacentHTML('beforeend', toolHtml); }
+      window.addEventListener('load', function () { document.body.insertAdjacentHTML('beforeend', toolHtml); }, { once: true });
     }
 
     setTimeout(() => {
@@ -952,7 +832,7 @@
 
       if (!toolBox) return;
 
-      toggleBtn.onclick = () => { toggleScript(toolBox); };
+      toggleBtn.onclick = () => { toggleScript(); };
       resetBtn.onclick = () => { cleanCount(toolBox); };
 
       const minBtn = toolBox.querySelector('.br_minimize-btn');
@@ -985,7 +865,7 @@
         toolBox.style.transition = 'none';
       };
 
-      document.onmousemove = (e) => {
+      document.addEventListener('mousemove', (e) => {
         if (!isDragging) return;
         e.preventDefault();
         let l = e.clientX - dragX;
@@ -996,8 +876,8 @@
         toolBox.style.top = t + 'px';
         toolBox.style.right = 'auto';
         toolBox.style.bottom = 'auto';
-      };
-      document.onmouseup = () => { isDragging = false; toolBox.style.transition = ''; };
+      });
+      document.addEventListener('mouseup', () => { isDragging = false; toolBox.style.transition = ''; });
 
       // 歷史搜尋記錄手風琴事件
       const historyHeader = document.getElementById('br_history_header');
@@ -1039,7 +919,7 @@
   // ============================================
   // 核心搜尋邏輯
   // ============================================
-  function toggleScript(toolBox) {
+  function toggleScript() {
     if (!checkLoginStatus()) return;
 
     const btn = document.getElementById('br_toggle_btn');
@@ -1047,7 +927,7 @@
     if (isTaskRunning()) {
       setTabTaskStatus(STATUS_PAUSED);
       stopAutoScroll();  // 停止頁面滾動
-      GM_setValue(AUTO_RUN_KEY, false);
+      stopTimer();  // 停止計時鏈
       btn.textContent = "▶ 繼續搜尋";
       btn.className = "br_btn br_btn_start";
       updateStatus("已暫停", "#666");
@@ -1072,7 +952,6 @@
       }
 
       setTabTaskStatus(STATUS_RUNNING);
-      GM_setValue(AUTO_RUN_KEY, true);
       btn.textContent = "⏸ 暫停搜尋";
       btn.className = "br_btn br_btn_stop";
       updateStatus("腳本運行中...", "#e67e22");
@@ -1088,20 +967,25 @@
     const currentPageType = getBingPageType();
 
     if (currentPageType === 'pc' && config.pc_count >= CONFIG.max_pc) {
+      setTabTaskStatus(STATUS_RESTING);
+      stopAutoScroll();
+      stopTimer();
       updateStatus("桌面版任務已達標", "#27ae60");
-      GM_setValue(AUTO_RUN_KEY, false);
+      updateCountdownUI("完成");
       updateStatusBadge(STATUS_RESTING);
       return;
     }
     if (currentPageType === 'ph' && config.ph_count >= CONFIG.max_ph) {
+      setTabTaskStatus(STATUS_RESTING);
+      stopAutoScroll();
+      stopTimer();
       updateStatus("行動版任務已達標", "#27ae60");
-      GM_setValue(AUTO_RUN_KEY, false);
+      updateCountdownUI("完成");
       updateStatusBadge(STATUS_RESTING);
       return;
     }
 
     setTabTaskStatus(STATUS_RUNNING);
-    GM_setValue(AUTO_RUN_KEY, true);
 
     const btn = document.getElementById('br_toggle_btn');
     if (btn) { btn.textContent = "⏸ 暫停搜尋"; btn.className = "br_btn br_btn_stop"; }
@@ -1113,6 +997,7 @@
 
   function startSearchLoop() {
     if (!isTaskRunning()) return;
+    if (timerActive) return;  // 已有活動計時鏈，避免重複啟動
 
     const config = getConfig();
     const currentPageType = getBingPageType();
@@ -1120,8 +1005,8 @@
     if (currentPageType === 'pc' && config.pc_count >= CONFIG.max_pc) { onTaskCompleted(); return; }
     if (currentPageType === 'ph' && config.ph_count >= CONFIG.max_ph) { onTaskCompleted(); return; }
 
-    // 使用 performance.now() 計算精確間隔
-    timerStart = performance.now();
+    // 使用 Date.now() 計算間隔（setTimeout 在背景分頁仍能運作，rAF 會被暫停）
+    timerStart = Date.now();
     timerInterval = getRandomInterval();
 
     // 記錄下次執行時間（支持背景執行）
@@ -1130,16 +1015,28 @@
 
     updateCountdownUI(Math.ceil(timerInterval / 1000));
 
-    // 使用 requestAnimationFrame 實現高精度計時
-    requestAnimationFrame(timerLoop);
+    timerActive = true;
+    timerLoop();
+  }
+
+  // 停止計時鏈
+  function stopTimer() {
+    timerActive = false;
+    if (timerHandle) {
+      clearTimeout(timerHandle);
+      timerHandle = null;
+    }
   }
 
   let lastSecondUpdate = 0;
-  function timerLoop(timestamp) {
-    if (!isTaskRunning()) return;
+  function timerLoop() {
+    if (!isTaskRunning()) {
+      stopTimer();
+      return;
+    }
 
     // 每秒更新倒數
-    const elapsed = timestamp - timerStart;
+    const elapsed = Date.now() - timerStart;
     const remaining = Math.max(0, Math.ceil((timerInterval - elapsed) / 1000));
 
     if (remaining !== lastSecondUpdate) {
@@ -1155,6 +1052,7 @@
 
     // 時間到，執行搜尋
     if (elapsed >= timerInterval) {
+      stopTimer();
       updateCountdownUI("正在跳轉...");
       lastSecondUpdate = 0;
       nextExecuteTime = 0;
@@ -1164,7 +1062,7 @@
     }
 
     // 繼續計時
-    requestAnimationFrame(timerLoop);
+    timerHandle = setTimeout(timerLoop, 250);
   }
 
   // 保存排程時間到存儲
@@ -1180,18 +1078,34 @@
   function performSearch() {
     if (!checkLoginStatus()) return;
     if (!isTaskRunning()) return;
+    // 防止計時鏈與排程輪詢同時觸發造成重複搜尋
+    if (Date.now() - lastSearchTime < 2000) return;
+
+    // 跨分頁計數鎖：避免多分頁併發時超過每日上限
+    const LOCK_KEY = 'bing_count_lock';
+    try {
+      const held = localStorage.getItem(LOCK_KEY);
+      // 5 秒租約，避免某分頁卡住造成死鎖
+      if (held && Number(held) > Date.now() - 5000) return;
+      localStorage.setItem(LOCK_KEY, String(Date.now()));
+    } catch (e) { /* 忽略錯誤，單分頁場景直接執行 */ }
 
     const config = getConfig();
     const currentPageType = getBingPageType();
 
-    if (currentPageType === 'pc' && config.pc_count >= CONFIG.max_pc) { onTaskCompleted(); return; }
-    if (currentPageType === 'ph' && config.ph_count >= CONFIG.max_ph) { onTaskCompleted(); return; }
+    const releaseLock = () => { try { localStorage.removeItem(LOCK_KEY); } catch (e) { /* 忽略錯誤 */ } };
+
+    if (currentPageType === 'pc' && config.pc_count >= CONFIG.max_pc) { releaseLock(); onTaskCompleted(); return; }
+    if (currentPageType === 'ph' && config.ph_count >= CONFIG.max_ph) { releaseLock(); onTaskCompleted(); return; }
 
     let newConfig = { ...config };
     if (currentPageType === 'pc') newConfig.pc_count++;
     else newConfig.ph_count++;
     saveConfig(newConfig);
+    releaseLock();
     updateUI();
+
+    lastSearchTime = Date.now();
 
     if ((currentPageType === 'pc' && newConfig.pc_count >= CONFIG.max_pc) || (currentPageType === 'ph' && newConfig.ph_count >= CONFIG.max_ph)) {
       onTaskCompleted();
@@ -1201,35 +1115,17 @@
     getRandomKeyword().then(keyword => {
       // 檢查完整關鍵字是否已送出過，嘗試最多 5 次取得不重複的關鍵字
       let attempts = 0;
-      const getNonDuplicateKeyword = () => {
-        if (isFullKeywordUsed(keyword) && attempts < 5) {
+      const tryNext = (kw) => {
+        if (isFullKeywordUsed(kw) && attempts < 5) {
           attempts++;
-          // 清除當前關鍵字的詞綴組合記錄，允許重新使用
-          const parts = keyword.split(/\s+/);
-          if (parts.length > 1) {
-            const base = parts.slice(1, -1).join(' ') || parts[0];
-            const prefix = parts[0];
-            const suffix = parts[parts.length - 1];
-            if (prefix !== base && suffix !== base) {
-              // 重置該組合
-              usedPrefixSuffixCombos.delete(`none_none_${base}`);
-              usedPrefixSuffixCombos.delete(`${prefix}_none_${base}`);
-              usedPrefixSuffixCombos.delete(`none_${suffix}_${base}`);
-              usedPrefixSuffixCombos.delete(`${prefix}_${suffix}_${base}`);
-            }
-          }
-          getRandomKeyword().then(newKw => {
-            currentKeyword = newKw;
-            addUsedFullKeyword(newKw);
-            executeSearch(newKw);
-          });
-        } else {
-          currentKeyword = keyword;
-          addUsedFullKeyword(keyword);
-          executeSearch(keyword);
+          getRandomKeyword().then(tryNext);
+          return;
         }
+        currentKeyword = kw;
+        addUsedFullKeyword(kw);
+        executeSearch(kw);
       };
-      getNonDuplicateKeyword();
+      tryNext(keyword);
     });
   }
 
@@ -1255,10 +1151,12 @@
 
       setTimeout(() => {
         try {
-          if (form) form.submit();
-          if (!btn) btn = document.querySelector("button.b_searchboxSubmit") || document.querySelector("a[title='Search']") || document.querySelector(".search_icon");
-          if (btn) btn.click();
-          if (input) input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+          if (form) {
+            form.submit();
+          } else {
+            if (!btn) btn = document.querySelector("button.b_searchboxSubmit") || document.querySelector("a[title='Search']") || document.querySelector(".search_icon");
+            if (btn) btn.click();
+          }
         } catch (e) { /* 忽略錯誤 */ }
       }, 300);
 
@@ -1274,7 +1172,7 @@
   function onTaskCompleted() {
     setTabTaskStatus(STATUS_RESTING);  // 進入休息中狀態
     stopAutoScroll();  // 停止頁面滾動
-    GM_setValue(AUTO_RUN_KEY, false);
+    stopTimer();  // 停止計時鏈
 
     const btn = document.getElementById('br_toggle_btn');
     if (btn) { btn.textContent = "▶ 開始搜尋"; btn.className = "br_btn br_btn_start"; }
@@ -1291,25 +1189,15 @@
     return taskStatus === STATUS_RUNNING;
   }
 
-  function isTaskPaused() {
-    return taskStatus === STATUS_PAUSED;
-  }
-
-  function isTaskResting() {
-    return taskStatus === STATUS_RESTING;
-  }
-
   // 檢查是否可執行任務（任務狀態為 running 且未達上限）
-  function canExecuteTask() {
-    if (taskStatus !== STATUS_RUNNING) return false;
-    const config = getConfig();
-    return canRunSearch(config);
-  }
 
   // ============================================
   // 工具函數
   // ============================================
-  function getToday() { return new Date().toISOString().split('T')[0]; }
+  function getToday() {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  }
 
   function getStorageData() {
     try { const data = GM_getValue(STORAGE_KEY); if (data) return JSON.parse(data); } catch (e) { /* 忽略錯誤 */ }
@@ -1399,9 +1287,9 @@
       const today = getToday();
       const currentPageType = getBingPageType();
       saveConfig({ date: today, lastDate: today, pc_count: 0, ph_count: 0, deviceType: currentPageType, autoStart: false });
-      GM_setValue(AUTO_RUN_KEY, false);
       setTabTaskStatus(STATUS_PAUSED);
       stopAutoScroll();  // 停止頁面滾動
+      stopTimer();  // 停止計時鏈
       updateUI();
       updateStatusBadge(STATUS_PAUSED);
       updateStatus("等待開始...", "#666");
@@ -1477,7 +1365,7 @@
   }
 
   function checkLoginStatus() {
-    // 檢查 Bing 登入狀態（多個可能的选择器）
+    // 檢查 Bing 登入狀態（多個可能的選擇器）
     const signInSelectors = [
       'span.sw_spd.id_avatar#id_a[aria-label="Sign in"]',
       '#id_a[aria-label*="Sign"]',
@@ -1492,8 +1380,13 @@
         // 檢查是否可見（未被隱藏）
         const isVisible = computedStyle.display !== 'none' && computedStyle.visibility !== 'hidden';
         if (isVisible) {
-          alert('請登入 Bing 以繼續任務');
-          if (isTaskRunning()) toggleScript();
+          console.log('[Bing Auto Search] 請登入 Bing 以繼續任務');
+          updateStatus('請登入 Bing 以繼續任務', '#d63031');
+          if (isTaskRunning()) {
+            setTabTaskStatus(STATUS_PAUSED);
+            stopAutoScroll();
+            stopTimer();
+          }
           return false;
         }
       }
@@ -1626,10 +1519,13 @@
           .filter(cleanWord => cleanWord.length >= 5);
 
         if (validWords.length > 0) {
-          // 隨機獲取 1~3 組單字
+          // 隨機獲取 1~3 組單字（均勻抽樣，避免 sort(shuffle) 偏差）
           const wordCount = Math.floor(Math.random() * 3) + 1;
-          const shuffled = validWords.sort(() => 0.5 - Math.random());
-          const selectedWords = shuffled.slice(0, wordCount);
+          const selectedWords = [];
+          const pool = [...validWords];
+          for (let i = 0; i < wordCount && pool.length > 0; i++) {
+            selectedWords.push(pool.splice(Math.floor(Math.random() * pool.length), 1)[0]);
+          }
           let enWord = selectedWords.join(' ');
 
           // 嘗試生成不重複的組合（最多 10 次）
@@ -1717,16 +1613,5 @@
       }
     });
     urlObserver.observe(document.body, { childList: true, subtree: true });
-
-    // 同時偵測 popstate 事件（瀏覽器導航）
-    window.addEventListener('popstate', () => {
-      setTimeout(() => {
-        if (isTaskRunning() && window.location.href.includes('bing.com/search')) {
-          doAutoScroll();
-          // 重新開始搜尋迴圈
-          startSearchLoop();
-        }
-      }, 3000);
-    });
   }
 })();

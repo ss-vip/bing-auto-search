@@ -1,0 +1,13 @@
+# macOS
+.DS_Store
+
+# Node.js
+node_modules
+dist
+
+# 暫存/除錯
+temp
+*.log
+
+# codegraph 索引
+.codegraph
