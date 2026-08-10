@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         Bing Auto Search
-// @version      2026081001
+// @version      2026081002
 // @description  無人值守 Bing 自動隨機搜尋
 // @author       Hank
 // @match        https://*.bing.com/*
@@ -161,6 +161,7 @@
   const MAX_HISTORY_RECORDS = 5;
   const WAKEUP_TRIGGER_KEY = 'bing_auto_wakeup';
   const CROSSDAY_CHECK_KEY = 'bing_crossday_check';
+const TASK_OWNER_KEY = 'bing_task_owner';
   const STATUS_PAUSED = 'paused';
   const STATUS_RUNNING = 'running';
   const STATUS_RESTING = 'resting';
@@ -219,6 +220,7 @@
   let nextExecuteTime = 0;
   let scrollInterval = null;
   let scrollTimeout = null;
+  let tabId = Math.random().toString(36).slice(2);
   function getTabTaskStatus() {
     try {
       const stored = sessionStorage.getItem(TASK_STATUS_KEY);
@@ -315,18 +317,8 @@
         bAlgoItems.forEach(item => {
           const text = item.textContent?.trim();
           if (text && text.length > 4 && text.length < 80 &&
-          !text.match(/^\d+\s*(小時|天|分鐘|小時前)$/) &&
           !text.includes('·') &&
           !text.match(/[A-Z][a-z]+\s+[A-Z][a-z]+/)) {
-            titles.push(text);
-          }
-        });
-      }
-      if (titles.length === 0) {
-        const h2Elements = doc.querySelectorAll('h2, h3');
-        h2Elements.forEach(el => {
-          const text = el.textContent?.trim();
-          if (text && text.length > 4 && text.length < 80 && !text.includes('熱門報導')) {
             titles.push(text);
           }
         });
@@ -347,12 +339,12 @@
     const savedStatus = getTabTaskStatus();
     if (savedStatus && savedStatus !== STATUS_PAUSED) {
       setTabTaskStatus(savedStatus);
-      if (savedStatus === STATUS_RUNNING) {
+      if (savedStatus === STATUS_RUNNING && !document.hidden) {
         setTimeout(() => startSearch(), 1500);
+      } else if (savedStatus === STATUS_RUNNING) {
+        setTabTaskStatus(STATUS_PAUSED);
       }
-    } else if (!savedStatus && getConfig().autoStart === true) {
-      setTabTaskStatus(STATUS_RUNNING);
-      console.log('[BAS] 分頁被休眠後重載，自動恢復任務');
+    } else if (!savedStatus && getConfig().autoStart === true && !document.hidden) {
       setTimeout(() => startSearch(), 1500);
     } else {
       setTabTaskStatus(STATUS_PAUSED);
@@ -394,6 +386,7 @@
     checkInterval = setInterval(() => {
       checkAndResetDay();
       checkScheduledExecution();
+      heartbeatTask();
       updateUI();
     }, 10000);
   }
@@ -455,9 +448,10 @@
       saveConfig(newConfig);
       resetComboTracking();
       clearUsedKeywords();
-      if (taskStatus === STATUS_RESTING) {
-        console.log('[BAS] 從休息中狀態恢復為進行中');
+      if (taskStatus === STATUS_RESTING && !document.hidden && claimTask()) {
         setTabTaskStatus(STATUS_RUNNING);
+        updateStatus("腳本運行中...", "#e67e22");
+        updateStatusBadge(STATUS_RUNNING);
         startSearchLoop();
         doAutoScroll();
       }
@@ -612,11 +606,38 @@
       updateStatusBadge(STATUS_RESTING);
     }
   }
+  function claimTask(force) {
+    try {
+      const raw = localStorage.getItem(TASK_OWNER_KEY);
+      if (!force && raw) {
+        const o = JSON.parse(raw);
+        if (o.id !== tabId && Date.now() - o.ts < 60000) return false;
+      }
+      localStorage.setItem(TASK_OWNER_KEY, JSON.stringify({ id: tabId, ts: Date.now() }));
+      return true;
+    } catch (e) { return true; }
+  }
+  function releaseTask() {
+    try {
+      const raw = localStorage.getItem(TASK_OWNER_KEY);
+      if (raw) {
+        const o = JSON.parse(raw);
+        if (o.id === tabId) localStorage.removeItem(TASK_OWNER_KEY);
+      }
+    } catch (e) { }
+  }
+  function heartbeatTask() {
+    if (!isTaskRunning()) return;
+    try {
+      localStorage.setItem(TASK_OWNER_KEY, JSON.stringify({ id: tabId, ts: Date.now() }));
+    } catch (e) { }
+  }
   function toggleScript() {
     checkLoginStatus();
     const btn = document.getElementById('br_toggle_btn');
     if (isTaskRunning()) {
       setTabTaskStatus(STATUS_PAUSED);
+      releaseTask();
       stopAutoScroll();
       stopTimer();
       btn.textContent = "▶ 繼續搜尋";
@@ -625,39 +646,21 @@
       updateCountdownUI("--");
       updateStatusBadge(STATUS_PAUSED);
     } else {
-      const config = getConfig();
-      const currentPageType = getBingPageType();
-      if (currentPageType === 'pc' && config.pc_count >= CONFIG.max_pc) {
-        setTabTaskStatus(STATUS_RESTING);
-        stopAutoScroll();
-        stopTimer();
-        updateStatus("桌面版任務已達標", "#27ae60");
-        updateCountdownUI("完成");
-        updateStatusBadge(STATUS_RESTING);
-        return;
-      }
-      if (currentPageType === 'ph' && config.ph_count >= CONFIG.max_ph) {
-        setTabTaskStatus(STATUS_RESTING);
-        stopAutoScroll();
-        stopTimer();
-        updateStatus("行動版任務已達標", "#27ae60");
-        updateCountdownUI("完成");
-        updateStatusBadge(STATUS_RESTING);
-        return;
-      }
-      setTabTaskStatus(STATUS_RUNNING);
-      btn.textContent = "⏸ 暫停搜尋";
-      btn.className = "br_btn br_btn_stop";
-      updateStatus("腳本運行中...", "#e67e22");
-      startSearchLoop();
-      updateStatusBadge(STATUS_RUNNING);
+      startSearch(true);
     }
   }
-  function startSearch() {
+  function startSearch(force) {
     checkLoginStatus();
     const config = getConfig();
+    if (!claimTask(!!force)) {
+      setTabTaskStatus(STATUS_PAUSED);
+      updateStatus("其他分頁正在執行任務", "#e67e22");
+      updateStatusBadge(STATUS_PAUSED);
+      return;
+    }
     const currentPageType = getBingPageType();
     if (currentPageType === 'pc' && config.pc_count >= CONFIG.max_pc) {
+      releaseTask();
       setTabTaskStatus(STATUS_RESTING);
       stopAutoScroll();
       stopTimer();
@@ -667,6 +670,7 @@
       return;
     }
     if (currentPageType === 'ph' && config.ph_count >= CONFIG.max_ph) {
+      releaseTask();
       setTabTaskStatus(STATUS_RESTING);
       stopAutoScroll();
       stopTimer();
@@ -815,6 +819,7 @@
     } catch (e) { }
   }
   function onTaskCompleted() {
+    releaseTask();
     setTabTaskStatus(STATUS_RESTING);
     stopAutoScroll();
     stopTimer();
@@ -849,12 +854,12 @@
   function getBingPageType() {
     const url = new URL(window.location.href);
     const form = url.searchParams.get('FORM');
-    if (url.hostname.includes('m.bing.com') || form === 'MH2MBB' || form === 'MBLAD') return 'ph';
+    if (/(^|\.)m\.bing\.com$/i.test(url.hostname) || form === 'MH2MBB' || form === 'MBLAD') return 'ph';
     if (form === 'MH16PS' || form === 'HDRS2') return 'pc';
     return isMobile() ? 'ph' : 'pc';
   }
   function isMobile() {
-   return /mobile|android|iphone|ipad|touch/i.test(navigator.userAgent.toLowerCase()) || window.innerWidth < 500;
+    return /mobile|android|iphone|ipad|touch/i.test(navigator.userAgent.toLowerCase());
   }
   function getRandomInterval() {
     return Math.floor(Math.random() * ((CONFIG.max_interval - CONFIG.min_interval) * 1000 + 1)) + CONFIG.min_interval * 1000;
@@ -904,6 +909,7 @@
       const today = getToday();
       saveConfig({ date: today, lastDate: today, pc_count: 0, ph_count: 0, autoStart: false });
       setTabTaskStatus(STATUS_PAUSED);
+      releaseTask();
       stopAutoScroll();
       stopTimer();
       updateUI();
@@ -961,26 +967,14 @@
     }
   }
   function checkLoginStatus() {
-    const signInSelectors = [
-    '#id_a[aria-label="登入"]',
-    'input[type="submit"][value="登入"]',
-    '#id_a[aria-label*="Sign"]',
-    'span.sw_spd.id_avatar#id_a[aria-label="Sign in"]',
-    'a[href*="signin"]'
-    ];
-    for (const selector of signInSelectors) {
-      const signInElement = document.querySelector(selector);
-      if (signInElement) {
-        const computedStyle = window.getComputedStyle(signInElement);
-        const isVisible = computedStyle.display !== 'none' && computedStyle.visibility !== 'hidden';
-        if (isVisible) {
-          console.log('[BAS] 請登入後領取獎勵');
-          updateStatus('請登入後領取獎勵', '#d63031');
-          return false;
-        }
-      }
-    }
-    return true;
+    const idP = document.querySelector('#id_p');
+    if (idP && idP.src && !/^data:/.test(idP.src)) return true;
+    const idN = document.querySelector('#id_n');
+    if (idN && idN.textContent.trim()) return true;
+    if (!document.querySelector('#id_a')) return true;
+    console.log('[BAS] 請登入後領取獎勵');
+    updateStatus('請登入後領取獎勵', '#d63031');
+    return false;
   }
   async function getRandomKeyword() {
     if (bingNewsKeywords.length > 0) {
@@ -1127,7 +1121,7 @@
       }
     return getRandomKeywordFromPool();
   }
-  if (window.location.hostname.endsWith('bing.com')) {
+  if (/(^|\.)bing\.com$/i.test(window.location.hostname)) {
     init();
     let lastUrl = window.location.href;
     const urlObserver = new MutationObserver(() => {

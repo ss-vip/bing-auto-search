@@ -24,8 +24,8 @@ async function main() {
     const m = item.match(/<title><!\[CDATA\[([^\]]*)\]\]><\/title>/);
     if (!m) continue;
     const t = cleanTitle(m[1]);
-    if (t.length < 4 || t.length > 40) continue;          // 過短或過長
-    if (!/[a-zA-Z\u4e00-\u9fff]/.test(t)) continue;        // 至少含一個中英文字元
+    if (t.length < 4 || t.length > 40) continue;
+    if (!/[a-zA-Z\u4e00-\u9fff]/.test(t)) continue;
     if (!titles.includes(t)) titles.push(t);
   }
 
@@ -35,7 +35,6 @@ async function main() {
   }
 
   const data = JSON.parse(fs.readFileSync(FILE, 'utf8'));
-  // 直接以最新 RSS 標題取代舊 keywords（不再合併累積）
   data.keywords = titles.slice(0, MAX_TOTAL);
 
   const next = JSON.stringify(data, null, 2) + '\n';
