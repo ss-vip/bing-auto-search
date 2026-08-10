@@ -6,9 +6,9 @@ const FILE = path.join(__dirname, '..', 'example.json');
 const MAX_TOTAL = 50;
 
 function cleanTitle(raw) {
-  return raw
-    .replace(/\u3000/g, ' ')   // 全形空格 → 半形
-    .replace(/<[^>]*>/g, '')   // 移除殘留 HTML tag
+  let s = raw.replace(/\u3000/g, ' ');   // 全形空格 → 半形
+  while (/<[^>]*>/.test(s)) s = s.replace(/<[^>]*>/g, '');  // 反覆移除 HTML tag（處理 <<script> 等畸形輸入）
+  return s
     .replace(/\s+/g, ' ')      // 壓縮空白
     .trim()
     .replace(/^[【\[（(][^】\]）)]*[】\]）)]\s*/, '');  // 移除系列/專欄前綴，如【動物農莊】（專訪）

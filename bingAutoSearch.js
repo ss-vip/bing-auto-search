@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         Bing Auto Search
-// @version      2026080903
+// @version      2026081001
 // @description  無人值守 Bing 自動隨機搜尋
 // @author       Hank
 // @match        https://*.bing.com/*
@@ -12,6 +12,8 @@
 // @license      GPL-3.0
 // @namespace    https://greasyfork.org/zh-TW/users/933219-tw1720
 // @supportURL   https://github.com/ss-vip/bing-auto-search
+// @updateURL    https://update.greasyfork.org/scripts/572057/Bing%20Auto%20Search.user.js
+// @downloadURL  https://update.greasyfork.org/scripts/572057/Bing%20Auto%20Search.user.js
 // ==/UserScript==
 (function () {
   'use strict';
@@ -174,7 +176,7 @@
     const now = new Date();
     const record = {
       keyword: keyword,
-      time: now.toLocaleString('zh-TW', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+      time: now.toLocaleString('zh-TW', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
     };
     history.unshift(record);
     if (history.length > MAX_HISTORY_RECORDS) {
@@ -269,17 +271,17 @@
           enWordFix: externalEnWordFix,
           lastFetch: Date.now()
         }));
-        console.log(`[Bing Auto Search] 詞彙庫已更新: ${keywordsPool.length} 組`);
+        console.log(`[BAS] 詞彙庫已更新: ${keywordsPool.length} 組`);
         return true;
       } catch (e) {
-        console.log('[Bing Auto Search] 外部詞彙載入失敗，使用快取或預設');
+        console.log('[BAS] 外部詞彙載入失敗，使用快取或預設');
       }
     }
     if (cacheData && (cacheData.keywords || cacheData.keywordFix || cacheData.enWordFix)) {
       keywordsPool = mergeAndDeduplicateKeywords(cacheData.keywords || [], CONFIG.defaultKeywordsPool);
       keywordFixPool = mergeAndDeduplicateFixes(cacheData.keywordFix || [], CONFIG.defaultKeywordFixPool);
     enWordFixPool = mergeAndDeduplicateFixes(cacheData.enWordFix || [], CONFIG.defaultEnWordFixPool);
-    console.log(`[Bing Auto Search] 使用本地快取: ${keywordsPool.length} 組`);
+    console.log(`[BAS] 使用本地快取: ${keywordsPool.length} 組`);
     return true;
   }
   keywordsPool = CONFIG.defaultKeywordsPool;
@@ -334,7 +336,7 @@
         bingNewsKeywords = uniqueTitles;
       }
     } catch (e) {
-      console.log('[Bing Auto Search] Bing News 關鍵字載入失敗');
+      console.log('[BAS] Bing News 關鍵字載入失敗');
     }
   }
   function init() {
@@ -350,28 +352,28 @@
       }
     } else if (!savedStatus && getConfig().autoStart === true) {
       setTabTaskStatus(STATUS_RUNNING);
-      console.log('[Bing Auto Search] 分頁被休眠後重載，自動恢復任務');
+      console.log('[BAS] 分頁被休眠後重載，自動恢復任務');
       setTimeout(() => startSearch(), 1500);
     } else {
       setTabTaskStatus(STATUS_PAUSED);
     }
     initStyles();
     initUI();
-    if (taskStatus === STATUS_RUNNING && window.location.href.includes('bing.com/search')) {
+    if (taskStatus === STATUS_RUNNING && window.location.pathname.includes('/search')) {
       doAutoScroll();
     }
     startKeepAlive();
     setupCrossDayListener();
     if (document.readyState === 'complete') {
       setTimeout(() => {
-        if (isTaskRunning() && window.location.href.includes('bing.com/search')) {
+        if (isTaskRunning() && window.location.pathname.includes('/search')) {
           doAutoScroll();
         }
       }, 3000);
     } else {
       window.addEventListener('load', () => {
         setTimeout(() => {
-          if (isTaskRunning() && window.location.href.includes('bing.com/search')) {
+          if (isTaskRunning() && window.location.pathname.includes('/search')) {
             doAutoScroll();
           }
         }, 3000);
@@ -399,7 +401,7 @@
     if (document.hidden) {
     } else {
       checkScheduledExecution();
-      if (isTaskRunning() && window.location.href.includes('bing.com/search')) {
+      if (isTaskRunning() && window.location.pathname.includes('/search')) {
         doAutoScroll();
       }
     }
@@ -442,7 +444,7 @@
       if (crossdayMark === today) {
         return;
       }
-      console.log('[Bing Auto Search] 檢測到跨天，執行重置...');
+      console.log('[BAS] 檢測到跨天，執行重置...');
       const newConfig = {
         date: today,
         lastDate: today,
@@ -454,7 +456,7 @@
       resetComboTracking();
       clearUsedKeywords();
       if (taskStatus === STATUS_RESTING) {
-        console.log('[Bing Auto Search] 從休息中狀態恢復為進行中');
+        console.log('[BAS] 從休息中狀態恢復為進行中');
         setTabTaskStatus(STATUS_RUNNING);
         startSearchLoop();
         doAutoScroll();
@@ -463,7 +465,7 @@
       broadcastWakeup();
       updateUI();
       updateStatus("跨天重置成功! 任務進行中...", "#e67e22");
-      console.log('[Bing Auto Search] 跨天重置完成');
+      console.log('[BAS] 跨天重置完成');
     } else if (!stored) {
       localStorage.setItem(CROSSDAY_CHECK_KEY, today);
     }
@@ -494,50 +496,8 @@
     return (currentPageType === 'pc' && config.pc_count < CONFIG.max_pc) || (currentPageType === 'ph' && config.ph_count < CONFIG.max_ph);
   }
   function initStyles() {
-    GM_addStyle(`
-#br_reward_tool { position: fixed; right: 30px; bottom: 30px; left: auto; top: auto; background: #fff; padding: 0; border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,0.15); width: 260px; z-index: 9999999; transition: box-shadow 0.2s, opacity 0.2s; cursor: default; user-select: none; border: 1px solid #dcdcdc; box-sizing: border-box; text-align: left; line-height: 1.5; color: #333; }
-#br_reward_tool * { box-sizing: border-box; }
-#br_reward_tool .br_header { position: relative; height: 40px; border-top-left-radius: 8px; border-top-right-radius: 8px; background: #f5f5f5; border-bottom: 1px solid #e0e0e0; display: flex; align-items: center; justify-content: space-between; padding: 0 12px; cursor: move; width: 100%; }
-#br_reward_tool .br_title { font-size: 14px; font-weight: 600; color: #444; }
-#br_reward_tool .br_date { font-size: 11px; color: #888; margin-left: 8px; font-weight: normal; }
-#br_reward_tool .br_minimize-btn { border: none; background: none; cursor: pointer; font-size: 20px; color: #666; padding: 0; width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; }
-#br_reward_tool .br_minimize-btn:hover { color: #0078d4; background: #e0e0e0; border-radius: 4px; }
-#br_reward_tool .br_panel-content { padding: 15px; background: #fff; border-bottom-left-radius: 8px; border-bottom-right-radius: 8px; }
-#br_reward_tool .br_btn { display: block; width: 100%; margin: 8px 0; padding: 8px 0; color: #fff; border-radius: 4px; text-align: center; font-weight: 600; text-decoration: none; font-size: 14px; cursor: pointer; transition: all 0.2s; border: none; outline: none; }
-.br_btn_start { background: #0078d4; }
-.br_btn_start:hover { background: #005bb5; }
-.br_btn_stop { background: #d63031; }
-.br_btn_stop:hover { background: #c0392b; }
-.br_btn_reset { background: #f0f0f0; color: #333 !important; border: 1px solid #ccc !important; font-weight: normal !important; }
-.br_btn_reset:hover { background: #e0e0e0; }
-#br_reward_tool p { margin: 8px 0; color: #444; font-size: 13px; display: flex; justify-content: space-between; align-items: center; }
-#br_reward_tool .br_count { font-weight: bold; color: #0078d4; font-size: 14px; }
-#br_reward_tool #br_status_text { color: #666; font-size: 12px; margin-top: 12px; text-align: center; display: block; background: #f9f9f9; padding: 4px; border-radius: 4px; }
-#br_reward_tool #br_countdown { color: #e67e22; font-weight: bold; }
-#br_reward_tool.br_minimized { width: 50px !important; height: 50px !important; padding: 0 !important; background: transparent !important; box-shadow: none !important; border: none !important; right: 30px !important; bottom: 50px !important; }
-#br_reward_tool.br_minimized .br_header, #br_reward_tool.br_minimized .br_panel-content { display: none !important; }
-#br_reward_tool .br_mini-icon { width: 50px; height: 50px; border-radius: 50%; background: #0078d4; display: flex; align-items: center; justify-content: center; color: #fff; font-size: 12px; cursor: pointer; box-shadow: 0 4px 12px rgba(0,0,0,0.3); font-weight: bold; border: 2px solid #fff; text-align: center; line-height: 1.2; }
-#br_reward_tool .br_mini-icon:hover { transform: scale(1.05); background: #005bb5; }
-#br_reward_tool .br_mini-icon.running { background: #d63031; animation: breathe 2s ease-in-out infinite; }
-@keyframes breathe { 0% { opacity: 1; box-shadow: 0 0 8px rgba(214, 48, 49, 0.5); } 50% { opacity: 0.6; box-shadow: 0 0 16px rgba(214, 48, 49, 0.8); } 100% { opacity: 1; box-shadow: 0 0 8px rgba(214, 48, 49, 0.5); } }
-#br_reward_tool .br_auto-badge { display: inline-block; background: #27ae60; color: #fff; font-size: 10px; padding: 2px 6px; border-radius: 3px; margin-left: 6px; vertical-align: middle; }
-#br_reward_tool .br_live-indicator { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #27ae60; margin-right: 6px; animation: pulse 1.5s infinite; }
-@keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.5; } 100% { opacity: 1; } }
-#br_reward_tool .br_mini-icon.paused { background: #0078d4; }
-#br_reward_tool .br_mini-icon.resting { background: #27ae60; }
-#br_reward_tool .br_status-badge { display: inline-block; font-size: 10px; padding: 2px 6px; border-radius: 3px; margin-left: 6px; vertical-align: middle; }
-#br_reward_tool .br_status-badge.paused { background: #666; color: #fff; }
-#br_reward_tool .br_status-badge.running { background: #e67e22; color: #fff; }
-#br_reward_tool .br_status-badge.resting { background: #27ae60; color: #fff; }
-#br_reward_tool .br_history-accordion { margin-top: 12px; border: 1px solid #e0e0e0; border-radius: 6px; overflow: hidden; }
-#br_reward_tool .br_history-header { display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: #f9f9f9; cursor: pointer; font-size: 13px; font-weight: 500; color: #444; user-select: none; }
-#br_reward_tool .br_history-header:hover { background: #f0f0f0; }
-#br_reward_tool .br_history-arrow { transition: transform 0.2s; font-size: 10px; color: #888; }
-#br_reward_tool .br_history-header.expanded .br_history-arrow { transform: rotate(180deg); }
-#br_reward_tool .br_history-content { display: none; max-height: 200px; overflow-y: auto; background: #fff; }
-#br_reward_tool .br_history-content.show { display: block; }
-#br_reward_tool .br_history-list { padding: 8px 12px; }
-`);
+    GM_addStyle(`#br_reward_tool{position:fixed;right:30px;bottom:30px;left:auto;top:auto;background:#fff;padding:0;border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,0.15);width:260px;z-index:9999999;transition:box-shadow 0.2s,opacity 0.2s;cursor:default;user-select:none;border:1px solid #dcdcdc;box-sizing:border-box;text-align:left;line-height:1.5;color:#333}#br_reward_tool *{box-sizing:border-box}.br_header{position:relative;height:40px;border-top-left-radius:8px;border-top-right-radius:8px;background:#f5f5f5;border-bottom:1px solid #e0e0e0;display:flex;align-items:center;justify-content:space-between;padding:0 12px;cursor:move;width:100%}.br_title{font-size:14px;font-weight:600;color:#444}.br_date{font-size:11px;color:#888;margin-left:8px;font-weight:normal}.br_minimize-btn{border:none;background:none;cursor:pointer;font-size:20px;color:#666;padding:0;width:24px;height:24px;display:flex;align-items:center;justify-content:center}.br_minimize-btn:hover{color:#0078d4;background:#e0e0e0;border-radius:4px}.br_panel-content{padding:15px;background:#fff;border-bottom-left-radius:8px;border-bottom-right-radius:8px}.br_btn{display:block;width:100%;margin:8px 0;padding:8px 0;color:#fff;border-radius:4px;text-align:center;font-weight:600;text-decoration:none;font-size:14px;cursor:pointer;transition:all 0.2s;border:none;outline:none}.br_btn_start{background:#0078d4}.br_btn_start:hover{background:#005bb5}.br_btn_stop{background:#d63031}.br_btn_stop:hover{background:#c0392b}.br_btn_reset{background:#f0f0f0;color:#333 !important;border:1px solid #ccc !important;font-weight:normal !important}.br_btn_reset:hover{background:#e0e0e0}#br_reward_tool p{margin:8px 0;color:#444;font-size:13px;display:flex;justify-content:space-between;align-items:center}.br_count{font-weight:bold;color:#0078d4;font-size:14px}#br_status_text{color:#666;font-size:12px;margin-top:12px;text-align:center;display:block;background:#f9f9f9;padding:4px;border-radius:4px}#br_countdown{color:#e67e22;font-weight:bold}#br_reward_tool.br_minimized{width:50px !important;height:50px !important;padding:0 !important;background:transparent !important;box-shadow:none !important;border:none !important;right:30px !important;bottom:50px !important}#br_reward_tool.br_minimized .br_header,#br_reward_tool.br_minimized .br_panel-content{display:none !important}.br_mini-icon{width:50px;height:50px;border-radius:50%;background:#0078d4;display:flex;align-items:center;justify-content:center;color:#fff;font-size:12px;cursor:pointer;box-shadow:0 4px 12px rgba(0,0,0,0.3);font-weight:bold;border:2px solid #fff;text-align:center;line-height:1.2}.br_mini-icon:hover{transform:scale(1.05);background:#005bb5}.br_mini-icon.running{background:#d63031;animation:breathe 2s ease-in-out infinite}@keyframes breathe{0%{opacity:1;box-shadow:0 0 8px rgba(214,48,49,0.5)}50%{opacity:0.6;box-shadow:0 0 16px rgba(214,48,49,0.8)}100%{opacity:1;box-shadow:0 0 8px rgba(214,48,49,0.5)}}.br_auto-badge{display:inline-block;background:#27ae60;color:#fff;font-size:10px;padding:2px 6px;border-radius:3px;margin-left:6px;vertical-align:middle}.br_live-indicator{display:inline-block;width:8px;height:8px;border-radius:50%;background:#27ae60;margin-right:6px;animation:pulse 1.5s infinite}@keyframes pulse{0%{opacity:1}50%{opacity:0.5}100%{opacity:1}}.br_mini-icon.paused{background:#0078d4}.br_mini-icon.resting{background:#27ae60}.br_status-badge{display:inline-block;font-size:10px;padding:2px 6px;border-radius:3px;margin-left:6px;vertical-align:middle}.br_status-badge.paused{background:#666;color:#fff}.br_status-badge.running{background:#e67e22;color:#fff}.br_status-badge.resting{background:#27ae60;color:#fff}.br_history-accordion{margin-top:12px;border:1px solid #e0e0e0;border-radius:6px;overflow:hidden}.br_history-header{display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:#f9f9f9;cursor:pointer;font-size:13px;font-weight:500;color:#444;user-select:none}.br_history-header:hover{background:#f0f0f0}.br_history-arrow{transition:transform 0.2s;font-size:10px;color:#888}.br_history-header.expanded .br_history-arrow{transform:rotate(180deg)}.br_history-content{display:none;max-height:200px;overflow-y:auto;background:#fff}.br_history-content.show{display:block}.br_history-list{padding:8px 12px}`);
+
   }
   function initUI() {
     const countInfo = getConfig();
@@ -682,6 +642,7 @@
         stopTimer();
         updateStatus("行動版任務已達標", "#27ae60");
         updateCountdownUI("完成");
+        updateStatusBadge(STATUS_RESTING);
         return;
       }
       setTabTaskStatus(STATUS_RUNNING);
@@ -846,7 +807,8 @@
         } catch (e) { }
       }, 300);
       setTimeout(() => {
-        if (isTaskRunning() && !window.location.href.includes('bing.com/search?')) {
+        const loc = new URL(window.location.href);
+        if (isTaskRunning() && !(loc.pathname.startsWith('/search') && loc.search.startsWith('?'))) {
           window.location.href = 'https://www.bing.com/search?q=' + encodeURIComponent(keyword);
         }
       }, 4000);
@@ -885,9 +847,10 @@
     return stored;
   }
   function getBingPageType() {
-    const url = window.location.href;
-    if (url.includes('m.bing.com') || url.includes('FORM=MH2MBB') || url.includes('FORM=MBLAD')) return 'ph';
-    if (url.includes('FORM=MH16PS') || url.includes('FORM=HDRS2')) return 'pc';
+    const url = new URL(window.location.href);
+    const form = url.searchParams.get('FORM');
+    if (url.hostname.includes('m.bing.com') || form === 'MH2MBB' || form === 'MBLAD') return 'ph';
+    if (form === 'MH16PS' || form === 'HDRS2') return 'pc';
     return isMobile() ? 'ph' : 'pc';
   }
   function isMobile() {
@@ -949,7 +912,7 @@
     }
   }
   function doAutoScroll() {
-    if (!window.location.href.includes('bing.com/search')) {
+    if (!window.location.pathname.includes('/search')) {
       return;
     }
     if (!isTaskRunning()) {
@@ -962,24 +925,24 @@
     }, 3000);
   }
   function startScrollLoop() {
-    if (!isTaskRunning() || !window.location.href.includes('bing.com/search')) {
+    if (!isTaskRunning() || !window.location.pathname.includes('/search')) {
       stopAutoScroll();
       return;
     }
     const scrollHeight = Math.max(document.body.scrollHeight, document.documentElement.scrollHeight);
     window.scrollTo({ top: scrollHeight, behavior: 'smooth' });
     scrollTimeout = setTimeout(() => {
-      if (isTaskRunning() && window.location.href.includes('bing.com/search')) {
+      if (isTaskRunning() && window.location.pathname.includes('/search')) {
         window.scrollTo({ top: 0, behavior: 'smooth' });
         scrollInterval = setInterval(() => {
-          if (!isTaskRunning() || !window.location.href.includes('bing.com/search')) {
+          if (!isTaskRunning() || !window.location.pathname.includes('/search')) {
             stopAutoScroll();
             return;
           }
           const sh = Math.max(document.body.scrollHeight, document.documentElement.scrollHeight);
           window.scrollTo({ top: sh, behavior: 'smooth' });
           scrollTimeout = setTimeout(() => {
-            if (isTaskRunning() && window.location.href.includes('bing.com/search')) {
+            if (isTaskRunning() && window.location.pathname.includes('/search')) {
               window.scrollTo({ top: 0, behavior: 'smooth' });
             }
           }, 2000);
@@ -1011,7 +974,7 @@
         const computedStyle = window.getComputedStyle(signInElement);
         const isVisible = computedStyle.display !== 'none' && computedStyle.visibility !== 'hidden';
         if (isVisible) {
-          console.log('[Bing Auto Search] 請登入後領取獎勵');
+          console.log('[BAS] 請登入後領取獎勵');
           updateStatus('請登入後領取獎勵', '#d63031');
           return false;
         }
@@ -1051,28 +1014,18 @@
       const baseKeyword = getUniqueKeywordFromPool();
       const positionRoll = Math.random() * 100;
       let selectedFix = null;
-      let fixType = 'none';
-      if (positionRoll < prefix) {
+      const fixType = positionRoll < prefix ? 'prefix' : positionRoll < prefix + suffix ? 'suffix' : 'none';
+      if (fixType !== 'none') {
         const availableFixes = filterDuplicateFixes(baseKeyword, keywordFixPool);
         if (availableFixes.length === 0) continue;
         selectedFix = availableFixes[Math.floor(Math.random() * availableFixes.length)];
-        fixType = 'prefix';
-      } else if (positionRoll < prefix + suffix) {
-        const availableFixes = filterDuplicateFixes(baseKeyword, keywordFixPool);
-        if (availableFixes.length === 0) continue;
-        selectedFix = availableFixes[Math.floor(Math.random() * availableFixes.length)];
-        fixType = 'suffix';
       }
       const keyPrefix = fixType === 'prefix' ? selectedFix : null;
       const keySuffix = fixType === 'suffix' ? selectedFix : null;
       if (!isComboUsed(keyPrefix, keySuffix, baseKeyword)) {
         markComboUsed(keyPrefix, keySuffix, baseKeyword);
-        let result;
-        if (fixType === 'prefix') result = `${selectedFix} ${baseKeyword}`;
-        else if (fixType === 'suffix') result = `${baseKeyword} ${selectedFix}`;
-        else result = baseKeyword;
-        result = removeDuplicateWords(result);
-        return result;
+        const result = fixType === 'prefix' ? `${selectedFix} ${baseKeyword}` : fixType === 'suffix' ? `${baseKeyword} ${selectedFix}` : baseKeyword;
+        return removeDuplicateWords(result);
       }
     }
     resetComboTracking();
@@ -1101,7 +1054,7 @@
     const { none, prefix, suffix, both } = CONFIG.enFixWeight;
     let joke = null;
     try { const c = JSON.parse(localStorage.getItem('bing_joke_cache') || '[]'); if (c.length > 0) { joke = c.shift(); localStorage.setItem('bing_joke_cache', JSON.stringify(c)); } } catch (e) { }
-    if (joke === null) {
+    if (joke == null) {
       try {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 5000);
@@ -1116,6 +1069,7 @@
       } catch (e) { }
     }
     if (joke) {
+      const av = (w) => enWordFixPool.filter(f => !w.toLowerCase().includes(f.toLowerCase()));
       const validWords = joke.split(/\s+/)
         .map(word => word.replace(/[^a-zA-Z]/g, ''))
         .filter(cleanWord => cleanWord.length >= 5);
@@ -1132,22 +1086,21 @@
             const positionRoll = Math.random() * 100;
             let tempEnWord = baseWord;
             if (positionRoll >= none && positionRoll < none + prefix) {
-              const availableFixes = enWordFixPool.filter(f => !baseWord.toLowerCase().includes(f.toLowerCase()));
+              const availableFixes = av(baseWord);
               if (availableFixes.length === 0) continue;
               const p = availableFixes[Math.floor(Math.random() * availableFixes.length)];
               tempEnWord = `${p} ${baseWord}`;
             } else if (positionRoll >= none + prefix && positionRoll < none + prefix + suffix) {
-              const availableFixes = enWordFixPool.filter(f => !baseWord.toLowerCase().includes(f.toLowerCase()));
+              const availableFixes = av(baseWord);
               if (availableFixes.length === 0) continue;
               const f = availableFixes[Math.floor(Math.random() * availableFixes.length)];
               tempEnWord = `${baseWord} ${f}`;
             } else if (positionRoll >= none + prefix + suffix) {
-              const baseLower = baseWord.toLowerCase();
-              const prefixPool = enWordFixPool.filter(f => !baseLower.includes(f.toLowerCase()));
+              const prefixPool = av(baseWord);
               if (prefixPool.length < 2) continue;
-              const p = prefixPool[Math.floor(Math.random() * prefixPool.length)];
-              const suffixPool = prefixPool.filter(f => f !== p);
-              const f = suffixPool[Math.floor(Math.random() * suffixPool.length)];
+              const pi = Math.floor(Math.random() * prefixPool.length);
+              const p = prefixPool[pi];
+              const f = prefixPool[(pi + 1) % prefixPool.length];
               tempEnWord = `${p} ${baseWord} ${f}`;
             }
             enWord = removeDuplicateWords(tempEnWord);
@@ -1157,13 +1110,13 @@
           if (positionRoll < none) {
             return removeDuplicateWords(enWord);
           } else if (positionRoll < none + prefix) {
-            const availableFixes = enWordFixPool.filter(f => !enWord.toLowerCase().includes(f.toLowerCase()));
+            const availableFixes = av(enWord);
             if (availableFixes.length > 0) {
               const p = availableFixes[Math.floor(Math.random() * availableFixes.length)];
               return removeDuplicateWords(`${p} ${enWord}`);
             }
           } else if (positionRoll < none + prefix + suffix) {
-            const availableFixes = enWordFixPool.filter(f => !enWord.toLowerCase().includes(f.toLowerCase()));
+            const availableFixes = av(enWord);
             if (availableFixes.length > 0) {
               const f = availableFixes[Math.floor(Math.random() * availableFixes.length)];
               return removeDuplicateWords(`${enWord} ${f}`);
@@ -1174,14 +1127,14 @@
       }
     return getRandomKeywordFromPool();
   }
-  if (window.location.href.includes('bing.com/search') || window.location.href.includes('bing.com/')) {
+  if (window.location.hostname.endsWith('bing.com')) {
     init();
     let lastUrl = window.location.href;
     const urlObserver = new MutationObserver(() => {
       if (window.location.href !== lastUrl) {
         lastUrl = window.location.href;
         setTimeout(() => {
-          if (isTaskRunning() && window.location.href.includes('bing.com/search')) {
+          if (isTaskRunning() && window.location.pathname.includes('/search')) {
             doAutoScroll();
             startSearchLoop();
           }
