@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         Bing Auto Search
-// @version      2026081002
+// @version      2026081101
 // @description  無人值守 Bing 自動隨機搜尋
 // @author       Hank
 // @match        https://*.bing.com/*
@@ -339,12 +339,10 @@ const TASK_OWNER_KEY = 'bing_task_owner';
     const savedStatus = getTabTaskStatus();
     if (savedStatus && savedStatus !== STATUS_PAUSED) {
       setTabTaskStatus(savedStatus);
-      if (savedStatus === STATUS_RUNNING && !document.hidden) {
+      if (savedStatus === STATUS_RUNNING) {
         setTimeout(() => startSearch(), 1500);
-      } else if (savedStatus === STATUS_RUNNING) {
-        setTabTaskStatus(STATUS_PAUSED);
       }
-    } else if (!savedStatus && getConfig().autoStart === true && !document.hidden) {
+    } else if (!savedStatus && getConfig().autoStart === true) {
       setTimeout(() => startSearch(), 1500);
     } else {
       setTabTaskStatus(STATUS_PAUSED);
@@ -391,8 +389,8 @@ const TASK_OWNER_KEY = 'bing_task_owner';
     }, 10000);
   }
   function handleVisibilityChange() {
-    if (document.hidden) {
-    } else {
+    if (!document.hidden) {
+      checkAndResetDay();
       checkScheduledExecution();
       if (isTaskRunning() && window.location.pathname.includes('/search')) {
         doAutoScroll();
@@ -448,10 +446,12 @@ const TASK_OWNER_KEY = 'bing_task_owner';
       saveConfig(newConfig);
       resetComboTracking();
       clearUsedKeywords();
-      if (taskStatus === STATUS_RESTING && !document.hidden && claimTask()) {
+      if (taskStatus === STATUS_RESTING && claimTask()) {
         setTabTaskStatus(STATUS_RUNNING);
         updateStatus("腳本運行中...", "#e67e22");
         updateStatusBadge(STATUS_RUNNING);
+        const btn = document.getElementById('br_toggle_btn');
+        if (btn) { btn.textContent = "⏸ 暫停搜尋"; btn.className = "br_btn br_btn_stop"; }
         startSearchLoop();
         doAutoScroll();
       }
@@ -633,7 +633,6 @@ const TASK_OWNER_KEY = 'bing_task_owner';
     } catch (e) { }
   }
   function toggleScript() {
-    checkLoginStatus();
     const btn = document.getElementById('br_toggle_btn');
     if (isTaskRunning()) {
       setTabTaskStatus(STATUS_PAUSED);
@@ -915,6 +914,8 @@ const TASK_OWNER_KEY = 'bing_task_owner';
       updateUI();
       updateStatusBadge(STATUS_PAUSED);
       updateStatus("等待開始...", "#666");
+      const btn = document.getElementById('br_toggle_btn');
+      if (btn) { btn.textContent = "▶ 開始搜尋"; btn.className = "br_btn br_btn_start"; }
     }
   }
   function doAutoScroll() {

@@ -18,7 +18,7 @@ jobs:
         with:
           node-version: 22
 
-      - name: 抓取 DIGITIMES RSS 並更新 example.json
+      - name: 更新 example.json
         run: node scripts/update-keywords.js
 
       - name: 提交變更

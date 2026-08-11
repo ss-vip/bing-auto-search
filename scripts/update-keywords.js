@@ -36,6 +36,7 @@ async function main() {
 
   const data = JSON.parse(fs.readFileSync(FILE, 'utf8'));
   data.keywords = titles.slice(0, MAX_TOTAL);
+  data.checkDateTime = new Date().toISOString();
 
   const next = JSON.stringify(data, null, 2) + '\n';
   if (next !== fs.readFileSync(FILE, 'utf8')) {
