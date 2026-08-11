@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         Bing Auto Search
-// @version      2026081101
+// @version      2026081102
 // @description  無人值守 Bing 自動隨機搜尋
 // @author       Hank
 // @match        https://*.bing.com/*
@@ -606,30 +606,35 @@ const TASK_OWNER_KEY = 'bing_task_owner';
       updateStatusBadge(STATUS_RESTING);
     }
   }
+  function getTaskOwnerKey() {
+    return TASK_OWNER_KEY + '_' + getBingPageType();
+  }
   function claimTask(force) {
     try {
-      const raw = localStorage.getItem(TASK_OWNER_KEY);
+      const key = getTaskOwnerKey();
+      const raw = localStorage.getItem(key);
       if (!force && raw) {
         const o = JSON.parse(raw);
         if (o.id !== tabId && Date.now() - o.ts < 60000) return false;
       }
-      localStorage.setItem(TASK_OWNER_KEY, JSON.stringify({ id: tabId, ts: Date.now() }));
+      localStorage.setItem(key, JSON.stringify({ id: tabId, ts: Date.now() }));
       return true;
     } catch (e) { return true; }
   }
   function releaseTask() {
     try {
-      const raw = localStorage.getItem(TASK_OWNER_KEY);
+      const key = getTaskOwnerKey();
+      const raw = localStorage.getItem(key);
       if (raw) {
         const o = JSON.parse(raw);
-        if (o.id === tabId) localStorage.removeItem(TASK_OWNER_KEY);
+        if (o.id === tabId) localStorage.removeItem(key);
       }
     } catch (e) { }
   }
   function heartbeatTask() {
     if (!isTaskRunning()) return;
     try {
-      localStorage.setItem(TASK_OWNER_KEY, JSON.stringify({ id: tabId, ts: Date.now() }));
+      localStorage.setItem(getTaskOwnerKey(), JSON.stringify({ id: tabId, ts: Date.now() }));
     } catch (e) { }
   }
   function toggleScript() {
@@ -747,7 +752,7 @@ const TASK_OWNER_KEY = 'bing_task_owner';
     checkLoginStatus();
     if (!isTaskRunning()) return;
     if (Date.now() - lastSearchTime < 2000) return;
-    const LOCK_KEY = 'bing_count_lock';
+    const LOCK_KEY = 'bing_count_lock_' + getBingPageType();
     try {
       const held = localStorage.getItem(LOCK_KEY);
       if (held && Number(held) > Date.now() - 5000) return;
