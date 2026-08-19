@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         Bing Auto Search
-// @version      2026081103
+// @version      2026081901
 // @description  無人值守 Bing 自動隨機搜尋
 // @author       Hank
 // @match        https://*.bing.com/*
@@ -22,6 +22,7 @@
     max_ph: 35,
     min_interval: 50,
     max_interval: 120,
+    timezone: 'Asia/Taipei',
     keywordsUrl: 'https://raw.githubusercontent.com/ss-vip/bing-auto-search/refs/heads/main/example.json',
     bingNewsUrl: 'https://www.bing.com/news/search?q=%e7%86%b1%e9%96%80%e5%a0%b1%e5%b0%8e&nvaug=%5bNewsVertical+Category%3d%22rt_MaxClass%22%5d',
     fixWeight: {
@@ -177,7 +178,7 @@ const TASK_OWNER_KEY = 'bing_task_owner';
     const now = new Date();
     const record = {
       keyword: keyword,
-      time: now.toLocaleString('zh-TW', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+      time: now.toLocaleString('zh-TW', { timeZone: CONFIG.timezone || undefined, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
     };
     history.unshift(record);
     if (history.length > MAX_HISTORY_RECORDS) {
@@ -189,7 +190,7 @@ const TASK_OWNER_KEY = 'bing_task_owner';
     updateSearchHistoryUI();
   }
   function updateSearchHistoryUI() {
-    const historyContainer = document.getElementById('br_search_history_list');
+    const historyContainer = document.getElementById('br_history_content');
     if (!historyContainer) return;
     const history = getSearchHistory();
     if (history.length === 0) {
@@ -432,20 +433,23 @@ const TASK_OWNER_KEY = 'bing_task_owner';
     const today = getToday();
     if (stored && stored.lastDate !== today) {
       const crossdayMark = localStorage.getItem(CROSSDAY_CHECK_KEY);
-      if (crossdayMark === today) {
-        return;
+      if (crossdayMark !== today) {
+        console.log('[BAS] 檢測到跨天，執行重置...');
+        const newConfig = {
+          date: today,
+          lastDate: today,
+          pc_count: 0,
+          ph_count: 0,
+          autoStart: true
+        };
+        saveConfig(newConfig);
+        resetComboTracking();
+        clearUsedKeywords();
+        localStorage.setItem(CROSSDAY_CHECK_KEY, today);
+        broadcastWakeup();
+        updateStatus("跨天重置成功! 任務進行中...", "#e67e22");
+        console.log('[BAS] 跨天重置完成');
       }
-      console.log('[BAS] 檢測到跨天，執行重置...');
-      const newConfig = {
-        date: today,
-        lastDate: today,
-        pc_count: 0,
-        ph_count: 0,
-        autoStart: true
-      };
-      saveConfig(newConfig);
-      resetComboTracking();
-      clearUsedKeywords();
       if (taskStatus === STATUS_RESTING && claimTask()) {
         setTabTaskStatus(STATUS_RUNNING);
         updateStatus("腳本運行中...", "#e67e22");
@@ -455,11 +459,7 @@ const TASK_OWNER_KEY = 'bing_task_owner';
         startSearchLoop();
         doAutoScroll();
       }
-      localStorage.setItem(CROSSDAY_CHECK_KEY, today);
-      broadcastWakeup();
       updateUI();
-      updateStatus("跨天重置成功! 任務進行中...", "#e67e22");
-      console.log('[BAS] 跨天重置完成');
     } else if (!stored) {
       localStorage.setItem(CROSSDAY_CHECK_KEY, today);
     }
@@ -490,7 +490,7 @@ const TASK_OWNER_KEY = 'bing_task_owner';
     return (currentPageType === 'pc' && config.pc_count < CONFIG.max_pc) || (currentPageType === 'ph' && config.ph_count < CONFIG.max_ph);
   }
   function initStyles() {
-    GM_addStyle(`#br_reward_tool{position:fixed;right:30px;bottom:30px;left:auto;top:auto;background:#fff;padding:0;border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,0.15);width:260px;z-index:9999999;transition:box-shadow 0.2s,opacity 0.2s;cursor:default;user-select:none;border:1px solid #dcdcdc;box-sizing:border-box;text-align:left;line-height:1.5;color:#333}#br_reward_tool *{box-sizing:border-box}.br_header{position:relative;height:40px;border-top-left-radius:8px;border-top-right-radius:8px;background:#f5f5f5;border-bottom:1px solid #e0e0e0;display:flex;align-items:center;justify-content:space-between;padding:0 12px;cursor:move;width:100%}.br_title{font-size:14px;font-weight:600;color:#444}.br_date{font-size:11px;color:#888;margin-left:8px;font-weight:normal}.br_minimize-btn{border:none;background:none;cursor:pointer;font-size:20px;color:#666;padding:0;width:24px;height:24px;display:flex;align-items:center;justify-content:center}.br_minimize-btn:hover{color:#0078d4;background:#e0e0e0;border-radius:4px}.br_panel-content{padding:15px;background:#fff;border-bottom-left-radius:8px;border-bottom-right-radius:8px}.br_btn{display:block;width:100%;margin:8px 0;padding:8px 0;color:#fff;border-radius:4px;text-align:center;font-weight:600;text-decoration:none;font-size:14px;cursor:pointer;transition:all 0.2s;border:none;outline:none}.br_btn_start{background:#0078d4}.br_btn_start:hover{background:#005bb5}.br_btn_stop{background:#d63031}.br_btn_stop:hover{background:#c0392b}.br_btn_reset{background:#f0f0f0;color:#333 !important;border:1px solid #ccc !important;font-weight:normal !important}.br_btn_reset:hover{background:#e0e0e0}#br_reward_tool p{margin:8px 0;color:#444;font-size:13px;display:flex;justify-content:space-between;align-items:center}.br_count{font-weight:bold;color:#0078d4;font-size:14px}#br_status_text{color:#666;font-size:12px;margin-top:12px;text-align:center;display:block;background:#f9f9f9;padding:4px;border-radius:4px}#br_countdown{color:#e67e22;font-weight:bold}#br_reward_tool.br_minimized{width:50px !important;height:50px !important;padding:0 !important;background:transparent !important;box-shadow:none !important;border:none !important;right:30px !important;bottom:50px !important}#br_reward_tool.br_minimized .br_header,#br_reward_tool.br_minimized .br_panel-content{display:none !important}.br_mini-icon{width:50px;height:50px;border-radius:50%;background:#0078d4;display:flex;align-items:center;justify-content:center;color:#fff;font-size:12px;cursor:pointer;box-shadow:0 4px 12px rgba(0,0,0,0.3);font-weight:bold;border:2px solid #fff;text-align:center;line-height:1.2}.br_mini-icon:hover{transform:scale(1.05);background:#005bb5}#br_reward_tool:not(.br_minimized) .br_mini-icon{display:none}.br_mini-icon.running{background:#d63031;animation:breathe 2s ease-in-out infinite}@keyframes breathe{0%{opacity:1;box-shadow:0 0 8px rgba(214,48,49,0.5)}50%{opacity:0.6;box-shadow:0 0 16px rgba(214,48,49,0.8)}100%{opacity:1;box-shadow:0 0 8px rgba(214,48,49,0.5)}}.br_auto-badge{display:inline-block;background:#27ae60;color:#fff;font-size:10px;padding:2px 6px;border-radius:3px;margin-left:6px;vertical-align:middle}.br_live-indicator{display:inline-block;width:8px;height:8px;border-radius:50%;background:#27ae60;margin-right:6px;animation:pulse 1.5s infinite}@keyframes pulse{0%{opacity:1}50%{opacity:0.5}100%{opacity:1}}.br_mini-icon.paused{background:#0078d4}.br_mini-icon.resting{background:#27ae60}.br_status-badge{display:inline-block;font-size:10px;padding:2px 6px;border-radius:3px;margin-left:6px;vertical-align:middle}.br_status-badge.paused{background:#666;color:#fff}.br_status-badge.running{background:#e67e22;color:#fff}.br_status-badge.resting{background:#27ae60;color:#fff}.br_history-accordion{margin-top:12px;border:1px solid #e0e0e0;border-radius:6px;overflow:hidden}.br_history-header{display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:#f9f9f9;cursor:pointer;font-size:13px;font-weight:500;color:#444;user-select:none}.br_history-header:hover{background:#f0f0f0}.br_history-arrow{transition:transform 0.2s;font-size:10px;color:#888}.br_history-header.expanded .br_history-arrow{transform:rotate(180deg)}.br_history-content{display:none;max-height:200px;overflow-y:auto;background:#fff}.br_history-content.show{display:block}.br_history-list{padding:8px 12px}`);
+    GM_addStyle(`#br_reward_tool{position:fixed;right:30px;bottom:30px;left:auto;top:auto;background:#fff;padding:0;border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,0.15);width:260px;z-index:9999999;cursor:default;user-select:none;border:1px solid #dcdcdc;box-sizing:border-box;text-align:left;line-height:1.5;color:#333}#br_reward_tool *{box-sizing:border-box}.br_header{position:relative;height:40px;border-top-left-radius:8px;border-top-right-radius:8px;background:#f5f5f5;border-bottom:1px solid #e0e0e0;display:flex;align-items:center;justify-content:space-between;padding:0 12px;cursor:move;width:100%}.br_title{font-size:14px;font-weight:600;color:#444}.br_date{font-size:11px;color:#888;margin-left:8px;font-weight:normal}.br_minimize-btn{border:none;background:none;cursor:pointer;font-size:20px;color:#666;padding:0;width:24px;height:24px;display:flex;align-items:center;justify-content:center}.br_minimize-btn:hover{color:#0078d4;background:#e0e0e0;border-radius:4px}.br_panel-content{padding:15px;background:#fff;border-bottom-left-radius:8px;border-bottom-right-radius:8px}.br_btn{display:block;width:100%;margin:8px 0;padding:8px 0;color:#fff;border-radius:4px;text-align:center;font-weight:600;text-decoration:none;font-size:14px;cursor:pointer;border:none;outline:none}.br_btn_start{background:#0078d4}.br_btn_start:hover{background:#005bb5}.br_btn_stop{background:#d63031}.br_btn_stop:hover{background:#c0392b}.br_btn_reset{background:#f0f0f0;color:#333 !important;border:1px solid #ccc !important;font-weight:normal !important;margin-top:10px}.br_btn_reset:hover{background:#e0e0e0}#br_reward_tool p{margin:8px 0;color:#444;font-size:13px;display:flex;justify-content:space-between;align-items:center}.br_count{font-weight:bold;color:#0078d4;font-size:14px}#br_status_text{color:#666;font-size:12px;margin-top:12px;text-align:center;display:block;background:#f9f9f9;padding:4px;border-radius:4px}#br_countdown{color:#e67e22;font-weight:bold}#br_reward_tool.br_minimized{width:50px !important;height:50px !important;padding:0 !important;background:transparent !important;box-shadow:none !important;border:none !important;right:30px !important;bottom:50px !important}#br_reward_tool.br_minimized .br_header,#br_reward_tool.br_minimized .br_panel-content{display:none !important}.br_mini-icon{width:50px;height:50px;border-radius:50%;background:#0078d4;display:flex;align-items:center;justify-content:center;color:#fff;font-size:12px;cursor:pointer;box-shadow:0 4px 12px rgba(0,0,0,0.3);font-weight:bold;border:2px solid #fff;text-align:center;line-height:1.2}.br_mini-icon:hover{background:#005bb5}#br_reward_tool:not(.br_minimized) .br_mini-icon{display:none}.br_mini-icon.running{background:#d63031}.br_live-indicator{display:inline-block;width:8px;height:8px;border-radius:50%;background:#27ae60;margin-right:6px}.br_mini-icon.paused{background:#0078d4}.br_mini-icon.resting{background:#27ae60}.br_status-badge{display:inline-block;font-size:10px;padding:2px 6px;border-radius:3px;margin-left:6px;vertical-align:middle}.br_status-badge.paused{background:#666;color:#fff}.br_status-badge.running{background:#e67e22;color:#fff}.br_status-badge.resting{background:#27ae60;color:#fff}.br_history-accordion{margin-top:12px;border:1px solid #e0e0e0;border-radius:6px;overflow:hidden}.br_history-header{display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:#f9f9f9;cursor:pointer;font-size:13px;font-weight:500;color:#444;user-select:none}.br_history-header:hover{background:#f0f0f0}.br_divider{border-top:1px solid #eee;margin:10px 0}.br_history-arrow{font-size:10px;color:#888}.br_history-header.expanded .br_history-arrow{transform:rotate(180deg)}.br_history-content{display:none;max-height:200px;overflow-y:auto;background:#fff;padding:8px 12px}.br_history-content.show{display:block}`);
 
   }
   function initUI() {
@@ -501,25 +501,23 @@ const TASK_OWNER_KEY = 'bing_task_owner';
 <div class="br_header">
 <span class="br_title"><span class="br_live-indicator"></span>隨機搜尋 <span class="br_status-badge" id="br_status_badge">暫停</span></span>
 <span class="br_date">${today}</span>
-<button class="br_minimize-btn" title="最小化">–</button>
+<button class="br_minimize-btn">–</button>
 </div>
 <div class="br_panel-content">
 <button id="br_toggle_btn" class="br_btn br_btn_start">▶ 開始搜尋</button>
-<div style="border-top: 1px solid #eee; margin: 10px 0;"></div>
+<div class="br_divider"></div>
 <p>桌面版搜尋: <span><span class="br_count" id="pc_count">${countInfo.pc_count}</span> / ${CONFIG.max_pc}</span></p>
 <p>行動版搜尋: <span><span class="br_count" id="ph_count">${countInfo.ph_count}</span> / ${CONFIG.max_ph}</span></p>
 <p>下一次搜尋: <span id="br_countdown">--</span></p>
 <span id="br_status_text">等待開始...</span>
-<button id="br_reset_btn" class="br_btn br_btn_reset" style="margin-top:10px;">↺ 重置今日計數</button>
+<button id="br_reset_btn" class="br_btn br_btn_reset">↺ 重置今日計數</button>
 <div class="br_history-accordion">
 <div class="br_history-header" id="br_history_header">
 <span>📜 最近搜尋記錄</span>
 <span class="br_history-arrow">▼</span>
 </div>
 <div class="br_history-content" id="br_history_content">
-<div class="br_history-list" id="br_search_history_list">
 <div style="color: #999; font-size: 12px; text-align: center; padding: 8px;">尚無搜尋記錄</div>
-</div>
 </div>
 </div>
 </div>
@@ -555,7 +553,6 @@ const TASK_OWNER_KEY = 'bing_task_owner';
         isDragging = true;
         dragX = e.clientX - toolBox.offsetLeft;
         dragY = e.clientY - toolBox.offsetTop;
-        toolBox.style.transition = 'none';
       };
       document.addEventListener('mousemove', (e) => {
         if (!isDragging) return;
@@ -569,7 +566,7 @@ const TASK_OWNER_KEY = 'bing_task_owner';
         toolBox.style.right = 'auto';
         toolBox.style.bottom = 'auto';
       });
-      document.addEventListener('mouseup', () => { isDragging = false; toolBox.style.transition = ''; });
+      document.addEventListener('mouseup', () => { isDragging = false; });
       const historyHeader = document.getElementById('br_history_header');
       const historyContent = document.getElementById('br_history_content');
       if (historyHeader && historyContent) {
@@ -829,6 +826,9 @@ const TASK_OWNER_KEY = 'bing_task_owner';
   }
   function getToday() {
     const d = new Date();
+    if (CONFIG.timezone) {
+      return new Intl.DateTimeFormat('en-CA', { timeZone: CONFIG.timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(d);
+    }
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
   }
   function getStorageData() {
