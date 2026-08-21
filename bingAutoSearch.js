@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         Bing Auto Search
-// @version      2026081901
+// @version      2026082101
 // @description  無人值守 Bing 自動隨機搜尋
 // @author       Hank
 // @match        https://*.bing.com/*
@@ -336,10 +336,12 @@ const TASK_OWNER_KEY = 'bing_task_owner';
     resetComboTracking();
     loadExternalKeywords();
     loadPanelKeywords();
-    checkAndResetDay();
     const savedStatus = getTabTaskStatus();
     if (savedStatus && savedStatus !== STATUS_PAUSED) {
       setTabTaskStatus(savedStatus);
+    }
+    checkAndResetDay();
+    if (savedStatus && savedStatus !== STATUS_PAUSED) {
       if (savedStatus === STATUS_RUNNING) {
         setTimeout(() => startSearch(), 1500);
       }
