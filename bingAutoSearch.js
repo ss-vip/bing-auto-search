@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         Bing Auto Search
-// @version      2026082101
+// @version      2026082401
 // @description  無人值守 Bing 自動隨機搜尋
 // @author       Hank
 // @match        https://*.bing.com/*
@@ -9,6 +9,7 @@
 // @grant        GM_getValue
 // @grant        GM_addStyle
 // @run-at       document-end
+// @noframes
 // @license      GPL-3.0
 // @namespace    https://greasyfork.org/zh-TW/users/933219-tw1720
 // @supportURL   https://github.com/ss-vip/bing-auto-search
@@ -161,14 +162,13 @@
   const SEARCH_HISTORY_KEY = 'bing_search_history';
   const MAX_HISTORY_RECORDS = 5;
   const WAKEUP_TRIGGER_KEY = 'bing_auto_wakeup';
-  const CROSSDAY_CHECK_KEY = 'bing_crossday_check';
 const TASK_OWNER_KEY = 'bing_task_owner';
   const STATUS_PAUSED = 'paused';
   const STATUS_RUNNING = 'running';
   const STATUS_RESTING = 'resting';
   function getSearchHistory() {
     try {
-      const data = localStorage.getItem(SEARCH_HISTORY_KEY);
+      const data = localStorage.getItem(SEARCH_HISTORY_KEY + '_' + getBingPageType());
       if (data) return JSON.parse(data);
     } catch (e) { }
     return [];
@@ -185,7 +185,7 @@ const TASK_OWNER_KEY = 'bing_task_owner';
       history.pop();
     }
     try {
-      localStorage.setItem(SEARCH_HISTORY_KEY, JSON.stringify(history));
+      localStorage.setItem(SEARCH_HISTORY_KEY + '_' + getBingPageType(), JSON.stringify(history));
     } catch (e) { }
     updateSearchHistoryUI();
   }
@@ -222,6 +222,8 @@ const TASK_OWNER_KEY = 'bing_task_owner';
   let scrollTimeout = null;
   let tabId = sessionStorage.getItem('bing_tab_id') || Math.random().toString(36).slice(2);
   try { sessionStorage.setItem('bing_tab_id', tabId); } catch (e) { }
+  let lastSeenDate = sessionStorage.getItem('bing_last_seen') || getToday();
+  try { sessionStorage.setItem('bing_last_seen', lastSeenDate); } catch (e) { }
   function getTabTaskStatus() {
     try {
       const stored = sessionStorage.getItem(TASK_STATUS_KEY);
@@ -431,40 +433,30 @@ const TASK_OWNER_KEY = 'bing_task_owner';
     }
   }
   function checkAndResetDay() {
-    const stored = getStorageData();
     const today = getToday();
+    if (lastSeenDate === today) return;
+    lastSeenDate = today;
+    try { sessionStorage.setItem('bing_last_seen', today); } catch (e) { }
+    const stored = getStorageData();
     if (stored && stored.lastDate !== today) {
-      const crossdayMark = localStorage.getItem(CROSSDAY_CHECK_KEY);
-      if (crossdayMark !== today) {
-        console.log('[BAS] 檢測到跨天，執行重置...');
-        const newConfig = {
-          date: today,
-          lastDate: today,
-          pc_count: 0,
-          ph_count: 0,
-          autoStart: true
-        };
-        saveConfig(newConfig);
-        resetComboTracking();
-        clearUsedKeywords();
-        localStorage.setItem(CROSSDAY_CHECK_KEY, today);
-        broadcastWakeup();
-        updateStatus("跨天重置成功! 任務進行中...", "#e67e22");
-        console.log('[BAS] 跨天重置完成');
-      }
-      if (taskStatus === STATUS_RESTING && claimTask()) {
-        setTabTaskStatus(STATUS_RUNNING);
-        updateStatus("腳本運行中...", "#e67e22");
-        updateStatusBadge(STATUS_RUNNING);
-        const btn = document.getElementById('br_toggle_btn');
-        if (btn) { btn.textContent = "⏸ 暫停搜尋"; btn.className = "br_btn br_btn_stop"; }
-        startSearchLoop();
-        doAutoScroll();
-      }
-      updateUI();
-    } else if (!stored) {
-      localStorage.setItem(CROSSDAY_CHECK_KEY, today);
+      console.log('[BAS] 檢測到跨天，執行重置...');
+      saveConfig({ date: today, lastDate: today, pc_count: 0, ph_count: 0, autoStart: true });
+      resetComboTracking();
+      clearUsedKeywords();
+      broadcastWakeup();
+      updateStatus("跨天重置成功! 任務進行中...", "#e67e22");
+      console.log('[BAS] 跨天重置完成');
     }
+    if (taskStatus === STATUS_RESTING && claimTask()) {
+      setTabTaskStatus(STATUS_RUNNING);
+      updateStatus("腳本運行中...", "#e67e22");
+      updateStatusBadge(STATUS_RUNNING);
+      const btn = document.getElementById('br_toggle_btn');
+      if (btn) { btn.textContent = "⏸ 暫停搜尋"; btn.className = "br_btn br_btn_stop"; }
+      startSearchLoop();
+      doAutoScroll();
+    }
+    updateUI();
   }
   function broadcastWakeup() {
     try {
