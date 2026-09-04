@@ -35,15 +35,16 @@ async function main() {
   }
 
   const data = JSON.parse(fs.readFileSync(FILE, 'utf8'));
-  data.keywords = titles.slice(0, MAX_TOTAL);
-  data.checkDateTime = new Date().toISOString();
+  const newKeywords = titles.slice(0, MAX_TOTAL);
+  const keywordsChanged = JSON.stringify(newKeywords) !== JSON.stringify(data.keywords);
 
-  const next = JSON.stringify(data, null, 2) + '\n';
-  if (next !== fs.readFileSync(FILE, 'utf8')) {
-    fs.writeFileSync(FILE, next);
+  if (keywordsChanged) {
+    data.keywords = newKeywords;
+    data.checkDateTime = new Date().toISOString();
+    fs.writeFileSync(FILE, JSON.stringify(data, null, 2) + '\n');
     console.log(`更新完成：keywords 已取代為最新 ${data.keywords.length} 筆`);
   } else {
-    console.log('無變化，跳過');
+    console.log('關鍵字無變化，跳過');
   }
 }
 

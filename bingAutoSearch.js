@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         Bing Auto Search
-// @version      2026082401
+// @version      2026090401
 // @description  無人值守 Bing 自動隨機搜尋
 // @author       Hank
 // @match        https://*.bing.com/*
@@ -45,8 +45,7 @@
     'Python 教學', 'Java 環境變數', 'Linux 常用指令', 'Docker 部署', 'React vs Vue', 'ChatGPT API 教學', 'GitHub Copilot 評測',
     'SQL 優化 技巧', '正則表達式 教學', 'C++ 指標 教學', 'Rust 入門 教學', 'Unity 遊戲開發', 'VS Code',
     'Python 爬蟲 教學', 'MacBook Pro', '必玩Steam遊戲',
-    '機械鍵盤', '降噪耳機', '智慧手錶', '感冒吃什麼改善', '番茄炒蛋做法', '避免近視眼', '減肥食譜', '影集', '超商便宜攻略',
-    '小資旅游攻略', '遊樂園門票優惠', '自駕旅遊', '今日金價', '美元匯率', '油價走勢'
+    '機械鍵盤', '降噪耳機', '智慧手錶', '影集', '自駕旅遊', '今日金價', '美元匯率', '油價走勢'
     ],
     defaultKeywordFixPool: ['最新', '資訊', '近期', '說明', '是啥', '常見', '有啥', '最好', '最推', '超便', '很優', '推薦'],
     defaultEnWordFixPool: ['英文', '中文', '翻譯', '解釋', '意思', '造句', '定義', '用法', '例句', '解說', '範例', '簡述']
@@ -344,7 +343,7 @@ const TASK_OWNER_KEY = 'bing_task_owner';
     }
     checkAndResetDay();
     if (savedStatus && savedStatus !== STATUS_PAUSED) {
-      if (savedStatus === STATUS_RUNNING) {
+      if (savedStatus === STATUS_RUNNING && canRunSearch(getConfig())) {
         setTimeout(() => startSearch(), 1500);
       }
     } else if (!savedStatus && getConfig().autoStart === true) {
@@ -579,15 +578,19 @@ const TASK_OWNER_KEY = 'bing_task_owner';
     if (taskStatus === STATUS_PAUSED) {
       updateStatus("等待開始...", "#666");
       updateStatusBadge(STATUS_PAUSED);
-    } else if (taskStatus === STATUS_RUNNING && canRun) {
-      updateStatus("腳本運行中...", "#e67e22");
-      updateStatusBadge(STATUS_RUNNING);
     } else if (taskStatus === STATUS_RUNNING && !canRun) {
-      onTaskCompleted();
-    } else if (taskStatus === STATUS_RESTING) {
+      releaseTask();
+      setTabTaskStatus(STATUS_RESTING);
+      stopAutoScroll();
+      stopTimer();
+    }
+    if (taskStatus === STATUS_RESTING) {
       updateStatus("任務已完成! 等待明日...", "#27ae60");
       updateCountdownUI("完成");
       updateStatusBadge(STATUS_RESTING);
+    } else if (taskStatus === STATUS_RUNNING && canRun) {
+      updateStatus("腳本運行中...", "#e67e22");
+      updateStatusBadge(STATUS_RUNNING);
     }
   }
   function getTaskOwnerKey() {
@@ -733,7 +736,7 @@ const TASK_OWNER_KEY = 'bing_task_owner';
     } catch (e) { }
   }
   function performSearch() {
-    checkLoginStatus();
+    if (!checkLoginStatus()) return;
     if (!isTaskRunning()) return;
     const LOCK_KEY = 'bing_count_lock_' + getBingPageType();
     try {
@@ -741,12 +744,13 @@ const TASK_OWNER_KEY = 'bing_task_owner';
       if (held && Number(held) > Date.now() - 5000) return;
       localStorage.setItem(LOCK_KEY, String(Date.now()));
     } catch (e) { /* 忽略錯誤，單分頁場景直接執行 */ }
-    const config = getConfig();
     const currentPageType = getBingPageType();
     const releaseLock = () => { try { localStorage.removeItem(LOCK_KEY); } catch (e) { } };
-    if (currentPageType === 'pc' && config.pc_count >= CONFIG.max_pc) { releaseLock(); onTaskCompleted(); return; }
-    if (currentPageType === 'ph' && config.ph_count >= CONFIG.max_ph) { releaseLock(); onTaskCompleted(); return; }
-    let newConfig = { ...config };
+    const raw = getStorageData();
+    const baseConfig = (raw && raw.lastDate === getToday()) ? raw : getConfig();
+    if (currentPageType === 'pc' && baseConfig.pc_count >= CONFIG.max_pc) { releaseLock(); onTaskCompleted(); return; }
+    if (currentPageType === 'ph' && baseConfig.ph_count >= CONFIG.max_ph) { releaseLock(); onTaskCompleted(); return; }
+    let newConfig = { ...baseConfig };
     if (currentPageType === 'pc') newConfig.pc_count++;
     else newConfig.ph_count++;
     saveConfig(newConfig);
@@ -768,6 +772,14 @@ const TASK_OWNER_KEY = 'bing_task_owner';
         executeSearch(kw);
       };
       tryNext(keyword);
+    }).catch(() => {
+      releaseTask();
+      setTabTaskStatus(STATUS_PAUSED);
+      stopTimer();
+      updateStatus('關鍵字載入失敗，請稍後重試', '#d63031');
+      updateStatusBadge(STATUS_PAUSED);
+      const btn = document.getElementById('br_toggle_btn');
+      if (btn) { btn.textContent = "▶ 開始搜尋"; btn.className = "br_btn br_btn_start"; }
     });
   }
   function executeSearch(keyword) {
@@ -799,7 +811,24 @@ const TASK_OWNER_KEY = 'bing_task_owner';
       setTimeout(() => {
         const loc = new URL(window.location.href);
         if (isTaskRunning() && !(loc.pathname.startsWith('/search') && loc.search.startsWith('?'))) {
-          window.location.href = 'https://www.bing.com/search?q=' + encodeURIComponent(keyword);
+          let fails = 0;
+          try { fails = parseInt(sessionStorage.getItem('bing_redirect_fails') || '0'); } catch (e) { }
+          if (fails >= 2) {
+            setTabTaskStatus(STATUS_PAUSED);
+            releaseTask();
+            stopAutoScroll();
+            stopTimer();
+            updateStatus('載入失敗，請手動到 Bing 搜尋後重試', '#d63031');
+            updateStatusBadge(STATUS_PAUSED);
+            const btn = document.getElementById('br_toggle_btn');
+            if (btn) { btn.textContent = "▶ 開始搜尋"; btn.className = "br_btn br_btn_start"; }
+            try { sessionStorage.removeItem('bing_redirect_fails'); } catch (e) { }
+            return;
+          }
+          try { sessionStorage.setItem('bing_redirect_fails', String(fails + 1)); } catch (e) { }
+          window.location.href = loc.origin + '/search?q=' + encodeURIComponent(keyword);
+        } else {
+          try { sessionStorage.removeItem('bing_redirect_fails'); } catch (e) { }
         }
       }, 4000);
     } catch (e) { }
