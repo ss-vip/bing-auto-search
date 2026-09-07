@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         Bing Auto Search
-// @version      2026090401
+// @version      2026090701
 // @description  無人值守 Bing 自動隨機搜尋
 // @author       Hank
 // @match        https://*.bing.com/*
@@ -358,21 +358,11 @@ const TASK_OWNER_KEY = 'bing_task_owner';
     }
     startKeepAlive();
     setupCrossDayListener();
-    if (document.readyState === 'complete') {
-      setTimeout(() => {
-        if (isTaskRunning() && window.location.pathname.includes('/search')) {
-          doAutoScroll();
-        }
-      }, 3000);
-    } else {
-      window.addEventListener('load', () => {
-        setTimeout(() => {
-          if (isTaskRunning() && window.location.pathname.includes('/search')) {
-            doAutoScroll();
-          }
-        }, 3000);
-      });
-    }
+    const startScroll = () => setTimeout(() => {
+      if (isTaskRunning() && window.location.pathname.includes('/search')) doAutoScroll();
+    }, 3000);
+    if (document.readyState === 'complete') startScroll();
+    else window.addEventListener('load', startScroll, { once: true });
     let lastTaskStatus = taskStatus;
     setInterval(() => {
       if (lastTaskStatus !== taskStatus) {
@@ -433,7 +423,14 @@ const TASK_OWNER_KEY = 'bing_task_owner';
   }
   function checkAndResetDay() {
     const today = getToday();
-    if (lastSeenDate === today) return;
+    if (lastSeenDate === today) {
+      if (taskStatus === STATUS_RESTING && canRunSearch(getConfig()) && claimTask()) {
+        setTabTaskStatus(STATUS_RUNNING);
+        startSearchLoop();
+        doAutoScroll();
+      }
+      return;
+    }
     lastSeenDate = today;
     try { sessionStorage.setItem('bing_last_seen', today); } catch (e) { }
     const stored = getStorageData();
@@ -450,8 +447,7 @@ const TASK_OWNER_KEY = 'bing_task_owner';
       setTabTaskStatus(STATUS_RUNNING);
       updateStatus("腳本運行中...", "#e67e22");
       updateStatusBadge(STATUS_RUNNING);
-      const btn = document.getElementById('br_toggle_btn');
-      if (btn) { btn.textContent = "⏸ 暫停搜尋"; btn.className = "br_btn br_btn_stop"; }
+      setBtn("⏸ 暫停搜尋", "br_btn br_btn_stop");
       startSearchLoop();
       doAutoScroll();
     }
@@ -467,14 +463,9 @@ const TASK_OWNER_KEY = 'bing_task_owner';
     } catch (e) { }
   }
   function setupCrossDayListener() {
-    window.addEventListener('storage', (e) => {
+    window.addEventListener('storage', e => {
       if (e.key === WAKEUP_TRIGGER_KEY && e.newValue) {
-        try {
-      const data = JSON.parse(e.newValue);
-      if (data.action === 'WAKEUP') {
-        checkAndResetDay();
-      }
-        } catch (err) {}
+        try { if (JSON.parse(e.newValue).action === 'WAKEUP') checkAndResetDay(); } catch (err) {}
       }
     });
   }
@@ -579,15 +570,10 @@ const TASK_OWNER_KEY = 'bing_task_owner';
       updateStatus("等待開始...", "#666");
       updateStatusBadge(STATUS_PAUSED);
     } else if (taskStatus === STATUS_RUNNING && !canRun) {
-      releaseTask();
-      setTabTaskStatus(STATUS_RESTING);
-      stopAutoScroll();
-      stopTimer();
+      haltTask(STATUS_RESTING);
     }
     if (taskStatus === STATUS_RESTING) {
-      updateStatus("任務已完成! 等待明日...", "#27ae60");
-      updateCountdownUI("完成");
-      updateStatusBadge(STATUS_RESTING);
+      showComplete();
     } else if (taskStatus === STATUS_RUNNING && canRun) {
       updateStatus("腳本運行中...", "#e67e22");
       updateStatusBadge(STATUS_RUNNING);
@@ -625,14 +611,9 @@ const TASK_OWNER_KEY = 'bing_task_owner';
     } catch (e) { }
   }
   function toggleScript() {
-    const btn = document.getElementById('br_toggle_btn');
     if (isTaskRunning()) {
-      setTabTaskStatus(STATUS_PAUSED);
-      releaseTask();
-      stopAutoScroll();
-      stopTimer();
-      btn.textContent = "▶ 繼續搜尋";
-      btn.className = "br_btn br_btn_start";
+      haltTask(STATUS_PAUSED);
+      setBtn("▶ 繼續搜尋", "br_btn br_btn_start");
       updateStatus("已暫停", "#666");
       updateCountdownUI("--");
       updateStatusBadge(STATUS_PAUSED);
@@ -644,35 +625,20 @@ const TASK_OWNER_KEY = 'bing_task_owner';
     checkLoginStatus();
     const config = getConfig();
     if (!claimTask(!!force)) {
-      setTabTaskStatus(STATUS_PAUSED);
+      haltTask(STATUS_PAUSED);
       updateStatus("其他分頁正在執行任務", "#e67e22");
       updateStatusBadge(STATUS_PAUSED);
       return;
     }
     const currentPageType = getBingPageType();
-    if (currentPageType === 'pc' && config.pc_count >= CONFIG.max_pc) {
-      releaseTask();
-      setTabTaskStatus(STATUS_RESTING);
-      stopAutoScroll();
-      stopTimer();
-      updateStatus("桌面版任務已達標", "#27ae60");
-      updateCountdownUI("完成");
-      updateStatusBadge(STATUS_RESTING);
-      return;
-    }
-    if (currentPageType === 'ph' && config.ph_count >= CONFIG.max_ph) {
-      releaseTask();
-      setTabTaskStatus(STATUS_RESTING);
-      stopAutoScroll();
-      stopTimer();
-      updateStatus("行動版任務已達標", "#27ae60");
-      updateCountdownUI("完成");
-      updateStatusBadge(STATUS_RESTING);
+    const atMax = (currentPageType === 'pc' && config.pc_count >= CONFIG.max_pc) || (currentPageType === 'ph' && config.ph_count >= CONFIG.max_ph);
+    if (atMax) {
+      haltTask(STATUS_RESTING);
+      showComplete(currentPageType === 'pc' ? "桌面版任務已達標" : "行動版任務已達標");
       return;
     }
     setTabTaskStatus(STATUS_RUNNING);
-    const btn = document.getElementById('br_toggle_btn');
-    if (btn) { btn.textContent = "⏸ 暫停搜尋"; btn.className = "br_btn br_btn_stop"; }
+    setBtn("⏸ 暫停搜尋", "br_btn br_btn_stop");
     updateStatus("腳本運行中...", "#e67e22");
     startSearchLoop();
     updateStatusBadge(STATUS_RUNNING);
@@ -773,13 +739,10 @@ const TASK_OWNER_KEY = 'bing_task_owner';
       };
       tryNext(keyword);
     }).catch(() => {
-      releaseTask();
-      setTabTaskStatus(STATUS_PAUSED);
-      stopTimer();
-      updateStatus('關鍵字載入失敗，請稍後重試', '#d63031');
+      haltTask(STATUS_PAUSED);
+      updateStatus('關鍵字載入失敗', '#d63031');
       updateStatusBadge(STATUS_PAUSED);
-      const btn = document.getElementById('br_toggle_btn');
-      if (btn) { btn.textContent = "▶ 開始搜尋"; btn.className = "br_btn br_btn_start"; }
+      setBtn("▶ 開始搜尋", "br_btn br_btn_start");
     });
   }
   function executeSearch(keyword) {
@@ -814,14 +777,10 @@ const TASK_OWNER_KEY = 'bing_task_owner';
           let fails = 0;
           try { fails = parseInt(sessionStorage.getItem('bing_redirect_fails') || '0'); } catch (e) { }
           if (fails >= 2) {
-            setTabTaskStatus(STATUS_PAUSED);
-            releaseTask();
-            stopAutoScroll();
-            stopTimer();
+            haltTask(STATUS_PAUSED);
             updateStatus('載入失敗，請手動到 Bing 搜尋後重試', '#d63031');
             updateStatusBadge(STATUS_PAUSED);
-            const btn = document.getElementById('br_toggle_btn');
-            if (btn) { btn.textContent = "▶ 開始搜尋"; btn.className = "br_btn br_btn_start"; }
+            setBtn("▶ 開始搜尋", "br_btn br_btn_start");
             try { sessionStorage.removeItem('bing_redirect_fails'); } catch (e) { }
             return;
           }
@@ -834,15 +793,9 @@ const TASK_OWNER_KEY = 'bing_task_owner';
     } catch (e) { }
   }
   function onTaskCompleted() {
-    releaseTask();
-    setTabTaskStatus(STATUS_RESTING);
-    stopAutoScroll();
-    stopTimer();
-    const btn = document.getElementById('br_toggle_btn');
-    if (btn) { btn.textContent = "▶ 開始搜尋"; btn.className = "br_btn br_btn_start"; }
-    updateStatus("任務已完成! 等待明日自動重啟...", "#27ae60");
-    updateCountdownUI("完成");
-    updateStatusBadge(STATUS_RESTING);
+    haltTask(STATUS_RESTING);
+    setBtn("▶ 開始搜尋", "br_btn br_btn_start");
+    showComplete("任務已完成! 等待明日自動重啟...");
   }
   function isTaskRunning() {
     return taskStatus === STATUS_RUNNING;
@@ -926,29 +879,18 @@ const TASK_OWNER_KEY = 'bing_task_owner';
     if (confirm("確定要重置今日的搜尋計數嗎？")) {
       const today = getToday();
       saveConfig({ date: today, lastDate: today, pc_count: 0, ph_count: 0, autoStart: false });
-      setTabTaskStatus(STATUS_PAUSED);
-      releaseTask();
-      stopAutoScroll();
-      stopTimer();
+      haltTask(STATUS_PAUSED);
       updateUI();
       updateStatusBadge(STATUS_PAUSED);
       updateStatus("等待開始...", "#666");
-      const btn = document.getElementById('br_toggle_btn');
-      if (btn) { btn.textContent = "▶ 開始搜尋"; btn.className = "br_btn br_btn_start"; }
+      setBtn("▶ 開始搜尋", "br_btn br_btn_start");
     }
   }
   function doAutoScroll() {
-    if (!window.location.pathname.includes('/search')) {
-      return;
-    }
-    if (!isTaskRunning()) {
-      return;
-    }
+    if (!window.location.pathname.includes('/search') || !isTaskRunning()) return;
     stopAutoScroll();
     window.scrollTo({ top: 0, behavior: 'smooth' });
-    scrollTimeout = setTimeout(() => {
-      startScrollLoop();
-    }, 3000);
+    scrollTimeout = setTimeout(startScrollLoop, 3000);
   }
   function startScrollLoop() {
     if (!isTaskRunning() || !window.location.pathname.includes('/search')) {
@@ -977,14 +919,24 @@ const TASK_OWNER_KEY = 'bing_task_owner';
     }, 2000);
   }
   function stopAutoScroll() {
-    if (scrollInterval) {
-      clearInterval(scrollInterval);
-      scrollInterval = null;
-    }
-    if (scrollTimeout) {
-      clearTimeout(scrollTimeout);
-      scrollTimeout = null;
-    }
+    if (scrollInterval) clearInterval(scrollInterval);
+    if (scrollTimeout) clearTimeout(scrollTimeout);
+    scrollInterval = scrollTimeout = null;
+  }
+  function haltTask(status) {
+    releaseTask();
+    setTabTaskStatus(status);
+    stopAutoScroll();
+    stopTimer();
+  }
+  function setBtn(text, cls) {
+    const b = document.getElementById('br_toggle_btn');
+    if (b) { b.textContent = text; b.className = cls; }
+  }
+  function showComplete(text) {
+    updateStatus(text || "任務已完成! 等待明日...", "#27ae60");
+    updateCountdownUI("完成");
+    updateStatusBadge(STATUS_RESTING);
   }
   function checkLoginStatus() {
     const idP = document.querySelector('#id_p');
