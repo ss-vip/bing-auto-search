@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         Bing Auto Search
-// @version      2026091401
+// @version      2026091402
 // @description  無人值守 Bing 自動隨機搜尋
 // @author       Hank
 // @match        https://*.bing.com/*
@@ -199,7 +199,7 @@ const TASK_OWNER_KEY = 'bing_task_owner';
     historyContainer.innerHTML = history.map(record => `
 <div style="padding: 6px 0; border-bottom: 1px solid #f0f0f0; font-size: 12px;">
 <div style="color: #333; word-break: break-all;">${escapeHtml(record.keyword)}</div>
-<div style="color: #888; font-size: 11px; margin-top: 2px;">${record.time}</div>
+<div style="color: #888; font-size: 11px; margin-top: 2px;">${escapeHtml(record.time)}</div>
 </div>
 `).join('');
   }
@@ -475,7 +475,7 @@ const TASK_OWNER_KEY = 'bing_task_owner';
     return (currentPageType === 'pc' && config.pc_count < CONFIG.max_pc) || (currentPageType === 'ph' && config.ph_count < CONFIG.max_ph);
   }
   function initStyles() {
-    GM_addStyle(`#br_reward_tool{position:fixed;right:30px;bottom:30px;left:auto;top:auto;background:#fff;padding:0;border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,0.15);width:260px;z-index:9999999;cursor:default;user-select:none;border:1px solid #dcdcdc;box-sizing:border-box;text-align:left;line-height:1.5;color:#333}#br_reward_tool *{box-sizing:border-box}.br_header{position:relative;height:40px;border-top-left-radius:8px;border-top-right-radius:8px;background:#f5f5f5;border-bottom:1px solid #e0e0e0;display:flex;align-items:center;justify-content:space-between;padding:0 12px;cursor:move;width:100%}.br_title{font-size:14px;font-weight:600;color:#444}.br_date{font-size:11px;color:#888;margin-left:8px;font-weight:normal}.br_minimize-btn{border:none;background:none;cursor:pointer;font-size:20px;color:#666;padding:0;width:24px;height:24px;display:flex;align-items:center;justify-content:center}.br_minimize-btn:hover{color:#0078d4;background:#e0e0e0;border-radius:4px}.br_panel-content{padding:15px;background:#fff;border-bottom-left-radius:8px;border-bottom-right-radius:8px}.br_btn{display:block;width:100%;margin:8px 0;padding:8px 0;color:#fff;border-radius:4px;text-align:center;font-weight:600;text-decoration:none;font-size:14px;cursor:pointer;border:none;outline:none}.br_btn_start{background:#0078d4}.br_btn_start:hover{background:#005bb5}.br_btn_stop{background:#d63031}.br_btn_stop:hover{background:#c0392b}.br_btn_reset{background:#f0f0f0;color:#333 !important;border:1px solid #ccc !important;font-weight:normal !important;margin-top:10px}.br_btn_reset:hover{background:#e0e0e0}#br_reward_tool p{margin:8px 0;color:#444;font-size:13px;display:flex;justify-content:space-between;align-items:center}.br_count{font-weight:bold;color:#0078d4;font-size:14px}#br_status_text{color:#666;font-size:12px;margin-top:12px;text-align:center;display:block;background:#f9f9f9;padding:4px;border-radius:4px}#br_countdown{color:#e67e22;font-weight:bold}#br_reward_tool.br_minimized{width:50px !important;height:50px !important;padding:0 !important;background:transparent !important;box-shadow:none !important;border:none !important;right:30px !important;bottom:50px !important}#br_reward_tool.br_minimized .br_header,#br_reward_tool.br_minimized .br_panel-content{display:none !important}.br_mini-icon{width:50px;height:50px;border-radius:50%;background:#0078d4;display:flex;align-items:center;justify-content:center;color:#fff;font-size:12px;cursor:pointer;box-shadow:0 4px 12px rgba(0,0,0,0.3);font-weight:bold;border:2px solid #fff;text-align:center;line-height:1.2}.br_mini-icon:hover{background:#005bb5}#br_reward_tool:not(.br_minimized) .br_mini-icon{display:none}.br_mini-icon.running{background:#d63031}.br_live-indicator{display:inline-block;width:8px;height:8px;border-radius:50%;background:#27ae60;margin-right:6px}.br_mini-icon.paused{background:#0078d4}.br_mini-icon.resting{background:#27ae60}.br_status-badge{display:inline-block;font-size:10px;padding:2px 6px;border-radius:3px;margin-left:6px;vertical-align:middle}.br_status-badge.paused{background:#666;color:#fff}.br_status-badge.running{background:#e67e22;color:#fff}.br_status-badge.resting{background:#27ae60;color:#fff}.br_history-accordion{margin-top:12px;border:1px solid #e0e0e0;border-radius:6px;overflow:hidden}.br_history-header{display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:#f9f9f9;cursor:pointer;font-size:13px;font-weight:500;color:#444;user-select:none}.br_history-header:hover{background:#f0f0f0}.br_divider{border-top:1px solid #eee;margin:10px 0}.br_history-arrow{font-size:10px;color:#888}.br_history-header.expanded .br_history-arrow{transform:rotate(180deg)}.br_history-content{display:none;max-height:200px;overflow-y:auto;background:#fff;padding:8px 12px}.br_history-content.show{display:block}`);
+    GM_addStyle(`#br_reward_tool{position:fixed;right:30px;bottom:30px;left:auto;top:auto;background:#fff;padding:0;border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,0.15);width:260px;z-index:9999999;cursor:default;user-select:none;border:1px solid #dcdcdc;box-sizing:border-box;text-align:left;line-height:1.5;color:#333}#br_reward_tool *{box-sizing:border-box}.br_header{position:relative;height:40px;border-top-left-radius:8px;border-top-right-radius:8px;background:#f5f5f5;border-bottom:1px solid #e0e0e0;display:flex;align-items:center;justify-content:space-between;padding:0 12px;cursor:move;width:100%}.br_title{font-size:14px;font-weight:600;color:#444}.br_date{font-size:11px;color:#888;margin-left:8px;font-weight:normal}.br_minimize-btn{border:none;background:none;cursor:pointer;font-size:20px;color:#666;padding:0;width:24px;height:24px;display:flex;align-items:center;justify-content:center}.br_minimize-btn:hover{color:#0078d4;background:#e0e0e0;border-radius:4px}.br_panel-content{padding:15px;background:#fff;border-bottom-left-radius:8px;border-bottom-right-radius:8px}.br_btn{display:block;width:100%;margin:8px 0;padding:8px 0;color:#fff;border-radius:4px;text-align:center;font-weight:600;text-decoration:none;font-size:14px;cursor:pointer;border:none;outline:none}.br_btn_start{background:#0078d4}.br_btn_start:hover{background:#005bb5}.br_btn_stop{background:#d63031}.br_btn_stop:hover{background:#c0392b}.br_btn_reset{background:#f0f0f0;color:#333 !important;border:1px solid #ccc !important;font-weight:normal !important;margin-top:10px}.br_btn_reset:hover{background:#e0e0e0}#br_reward_tool p{margin:8px 0;color:#444;font-size:13px;display:flex;justify-content:space-between;align-items:center}.br_count{font-weight:bold;color:#0078d4;font-size:14px}#br_status_text{color:#666;font-size:12px;margin-top:12px;text-align:center;display:block;background:#f9f9f9;padding:4px;border-radius:4px}#br_countdown{color:#e67e22;font-weight:bold}#br_reward_tool.br_minimized{width:50px !important;height:50px !important;padding:0 !important;background:transparent !important;box-shadow:none !important;border:none !important;right:30px !important;bottom:50px !important}#br_reward_tool.br_minimized .br_header,#br_reward_tool.br_minimized .br_panel-content{display:none !important}.br_mini-icon{width:50px;height:50px;border-radius:50%;background:#0078d4;display:flex;align-items:center;justify-content:center;color:#fff;font-size:12px;cursor:pointer;box-shadow:0 4px 12px rgba(0,0,0,0.3);font-weight:bold;border:2px solid #fff;text-align:center;line-height:1.2}.br_mini-icon:hover{background:#005bb5}#br_reward_tool:not(.br_minimized) .br_mini-icon{display:none}.br_mini-icon.running{background:#d63031}.br_live-indicator{display:inline-block;width:8px;height:8px;border-radius:50%;background:#27ae60;margin-right:6px}.br_mini-icon.paused{background:#0078d4}.br_mini-icon.resting{background:#27ae60}.br_status-badge{display:inline-block;font-size:10px;padding:2px 6px;border-radius:3px;margin-left:6px;vertical-align:middle}.br_status-badge.paused{background:#666;color:#fff}.br_status-badge.running{background:#e67e22;color:#fff}.br_status-badge.resting{background:#27ae60;color:#fff}.br_history-accordion{margin-top:12px;border:1px solid #e0e0e0;border-radius:6px;overflow:hidden}.br_history-header{display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:#f9f9f9;cursor:pointer;font-size:13px;font-weight:500;color:#444;user-select:none}.br_history-header:hover{background:#f0f0f0}.br_divider{border-top:1px solid #eee;margin:10px 0}.br_history-arrow{font-size:10px;color:#888}.br_history-header.expanded .br_history-arrow{transform:rotate(180deg)}.br_history-content{display:none;max-height:200px;overflow-y:auto;background:#fff;padding:8px 12px}.br_history-content.show{display:block}#br_reward_tool.br_dragging,#br_reward_tool.br_dragging *{cursor:move !important}.br_btn:focus-visible,.br_minimize-btn:focus-visible{outline:2px solid #0078d4;outline-offset:2px}.br_panel-content{max-height:calc(100vh - 120px);overflow-y:auto}`);
 
   }
   function initUI() {
@@ -497,7 +497,7 @@ const TASK_OWNER_KEY = 'bing_task_owner';
 <span id="br_status_text">等待開始...</span>
 <button id="br_reset_btn" class="br_btn br_btn_reset">↺ 重置今日計數</button>
 <div class="br_history-accordion">
-<div class="br_history-header" id="br_history_header">
+<div class="br_history-header" id="br_history_header" role="button" tabindex="0" aria-expanded="false" aria-controls="br_history_content">
 <span>📜 最近搜尋記錄</span>
 <span class="br_history-arrow">▼</span>
 </div>
@@ -519,23 +519,27 @@ const TASK_OWNER_KEY = 'bing_task_owner';
       const toggleBtn = document.getElementById('br_toggle_btn');
       const resetBtn = document.getElementById('br_reset_btn');
       if (!toolBox) return;
+      toggleBtn.onmousedown = (e) => { e.stopPropagation(); };
       toggleBtn.onclick = () => { toggleScript(); };
+      resetBtn.onmousedown = (e) => { e.stopPropagation(); };
       resetBtn.onclick = () => { cleanCount(toolBox); };
       const minBtn = toolBox.querySelector('.br_minimize-btn');
       const miniIcon = toolBox.querySelector('.br_mini-icon');
       const header = toolBox.querySelector('.br_header');
+      minBtn.onmousedown = (e) => { e.stopPropagation(); };
       minBtn.onclick = (e) => {
         e.stopPropagation();
         toolBox.classList.add('br_minimized');
-        toolBox.style.right = '30px'; toolBox.style.bottom = '30px'; toolBox.style.left = 'auto'; toolBox.style.top = 'auto';
       };
+      miniIcon.onmousedown = (e) => { e.stopPropagation(); };
       miniIcon.onclick = (e) => {
         e.stopPropagation();
         toolBox.classList.remove('br_minimized');
-        toolBox.style.right = '30px'; toolBox.style.bottom = '30px'; toolBox.style.left = 'auto'; toolBox.style.top = 'auto';
       };
       header.onmousedown = (e) => {
+        e.preventDefault();
         isDragging = true;
+        toolBox.classList.add('br_dragging');
         dragX = e.clientX - toolBox.offsetLeft;
         dragY = e.clientY - toolBox.offsetTop;
       };
@@ -551,17 +555,43 @@ const TASK_OWNER_KEY = 'bing_task_owner';
         toolBox.style.right = 'auto';
         toolBox.style.bottom = 'auto';
       });
-      document.addEventListener('mouseup', () => { isDragging = false; }, { once: true });
-      // Re-attach for next drag cycle since {once: true} auto-removes
-      document.addEventListener('mousedown', () => {
-        document.addEventListener('mouseup', () => { isDragging = false; }, { once: true });
-      }, { once: true });
+      document.addEventListener('mouseup', () => {
+        isDragging = false;
+        toolBox.classList.remove('br_dragging');
+      });
+      header.addEventListener('touchstart', (e) => {
+        const touch = e.touches[0];
+        isDragging = true;
+        toolBox.classList.add('br_dragging');
+        dragX = touch.clientX - toolBox.offsetLeft;
+        dragY = touch.clientY - toolBox.offsetTop;
+      }, { passive: true });
+      document.addEventListener('touchmove', (e) => {
+        if (!isDragging) return;
+        const touch = e.touches[0];
+        let l = touch.clientX - dragX;
+        let t = touch.clientY - dragY;
+        l = Math.max(0, Math.min(window.innerWidth - toolBox.offsetWidth, l));
+        t = Math.max(0, Math.min(window.innerHeight - toolBox.offsetHeight, t));
+        toolBox.style.left = l + 'px';
+        toolBox.style.top = t + 'px';
+        toolBox.style.right = 'auto';
+        toolBox.style.bottom = 'auto';
+      }, { passive: true });
+      document.addEventListener('touchend', () => {
+        isDragging = false;
+        toolBox.classList.remove('br_dragging');
+      });
       const historyHeader = document.getElementById('br_history_header');
       const historyContent = document.getElementById('br_history_content');
       if (historyHeader && historyContent) {
         historyHeader.onclick = () => {
           historyHeader.classList.toggle('expanded');
           historyContent.classList.toggle('show');
+          historyHeader.setAttribute('aria-expanded', historyContent.classList.contains('show'));
+        };
+        historyHeader.onkeydown = (e) => {
+          if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); historyHeader.onclick(); }
         };
         updateSearchHistoryUI();
       }
@@ -627,7 +657,7 @@ const TASK_OWNER_KEY = 'bing_task_owner';
     }
   }
   function startSearch(force) {
-    checkLoginStatus();
+    if (!checkLoginStatus()) return;
     const config = getConfig();
     if (!claimTask(!!force)) {
       haltTask(STATUS_PAUSED);
