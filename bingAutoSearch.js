@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         Bing Auto Search
-// @version      2026090701
+// @version      2026091401
 // @description  無人值守 Bing 自動隨機搜尋
 // @author       Hank
 // @match        https://*.bing.com/*
@@ -155,11 +155,11 @@
     return fixes.filter(fix => !baseWords.has(fix));
   }
   const STORAGE_KEY = 'bingAutoSearch';
-  const JOKE_API_URL = 'https://v2.jokeapi.dev/joke/Any?blacklistFlags=nsfw,religious,political,racist,sexist,explicit&type=single&amount=10';
   const KEYWORDS_CACHE_KEY = 'bing_keywords_cache';
   const TASK_STATUS_KEY = 'bing_task_status';
   const SEARCH_HISTORY_KEY = 'bing_search_history';
-  const MAX_HISTORY_RECORDS = 5;
+  const MAX_HISTORY_RECORDS = 3;
+  const MAX_KEYWORD_HISTORY = 50;
   const WAKEUP_TRIGGER_KEY = 'bing_auto_wakeup';
 const TASK_OWNER_KEY = 'bing_task_owner';
   const STATUS_PAUSED = 'paused';
@@ -180,7 +180,7 @@ const TASK_OWNER_KEY = 'bing_task_owner';
       time: now.toLocaleString('zh-TW', { timeZone: CONFIG.timezone || undefined, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
     };
     history.unshift(record);
-    if (history.length > MAX_HISTORY_RECORDS) {
+    if (history.length > 3) {
       history.pop();
     }
     try {
@@ -284,15 +284,16 @@ const TASK_OWNER_KEY = 'bing_task_owner';
     if (cacheData && (cacheData.keywords || cacheData.keywordFix || cacheData.enWordFix)) {
       keywordsPool = mergeAndDeduplicateKeywords(cacheData.keywords || [], CONFIG.defaultKeywordsPool);
       keywordFixPool = mergeAndDeduplicateFixes(cacheData.keywordFix || [], CONFIG.defaultKeywordFixPool);
-    enWordFixPool = mergeAndDeduplicateFixes(cacheData.enWordFix || [], CONFIG.defaultEnWordFixPool);
-    console.log(`[BAS] 使用本地快取: ${keywordsPool.length} 組`);
-    return true;
+      enWordFixPool = mergeAndDeduplicateFixes(cacheData.enWordFix || [], CONFIG.defaultEnWordFixPool);
+      console.log(`[BAS] 使用本地快取: ${keywordsPool.length} 組`);
+      return true;
+    }
+    keywordsPool = CONFIG.defaultKeywordsPool;
+    keywordFixPool = CONFIG.defaultKeywordFixPool;
+    enWordFixPool = CONFIG.defaultEnWordFixPool;
+    console.log('[BAS] 使用預設詞彙');
+    return false;
   }
-  keywordsPool = CONFIG.defaultKeywordsPool;
-  keywordFixPool = CONFIG.defaultKeywordFixPool;
-  enWordFixPool = CONFIG.defaultEnWordFixPool;
-  return false;
-}
   async function loadPanelKeywords() {
     if (!CONFIG.bingNewsUrl) return;
     try {
@@ -333,10 +334,10 @@ const TASK_OWNER_KEY = 'bing_task_owner';
       console.log('[BAS] Bing News 關鍵字載入失敗');
     }
   }
-  function init() {
+  async function init() {
     resetComboTracking();
-    loadExternalKeywords();
-    loadPanelKeywords();
+    await loadExternalKeywords();
+    await loadPanelKeywords();
     const savedStatus = getTabTaskStatus();
     if (savedStatus && savedStatus !== STATUS_PAUSED) {
       setTabTaskStatus(savedStatus);
@@ -550,7 +551,11 @@ const TASK_OWNER_KEY = 'bing_task_owner';
         toolBox.style.right = 'auto';
         toolBox.style.bottom = 'auto';
       });
-      document.addEventListener('mouseup', () => { isDragging = false; });
+      document.addEventListener('mouseup', () => { isDragging = false; }, { once: true });
+      // Re-attach for next drag cycle since {once: true} auto-removes
+      document.addEventListener('mousedown', () => {
+        document.addEventListener('mouseup', () => { isDragging = false; }, { once: true });
+      }, { once: true });
       const historyHeader = document.getElementById('br_history_header');
       const historyContent = document.getElementById('br_history_content');
       if (historyHeader && historyContent) {
@@ -588,7 +593,7 @@ const TASK_OWNER_KEY = 'bing_task_owner';
       const raw = localStorage.getItem(key);
       if (!force && raw) {
         const o = JSON.parse(raw);
-        if (o.id !== tabId && Date.now() - o.ts < 60000) return false;
+        if (o.id !== tabId && Date.now() - o.ts < 15000) return false;
       }
       localStorage.setItem(key, JSON.stringify({ id: tabId, ts: Date.now() }));
       return true;
@@ -660,6 +665,8 @@ const TASK_OWNER_KEY = 'bing_task_owner';
   }
   function stopTimer() {
     timerActive = false;
+    timerStart = 0;
+    timerInterval = 0;
     lastSecondUpdate = 0;
     if (timerHandle) {
       clearTimeout(timerHandle);
@@ -707,7 +714,7 @@ const TASK_OWNER_KEY = 'bing_task_owner';
     const LOCK_KEY = 'bing_count_lock_' + getBingPageType();
     try {
       const held = localStorage.getItem(LOCK_KEY);
-      if (held && Number(held) > Date.now() - 5000) return;
+      if (held && Number(held) > Date.now() - 10000) return;
       localStorage.setItem(LOCK_KEY, String(Date.now()));
     } catch (e) { /* 忽略錯誤，單分頁場景直接執行 */ }
     const currentPageType = getBingPageType();
@@ -720,9 +727,9 @@ const TASK_OWNER_KEY = 'bing_task_owner';
     if (currentPageType === 'pc') newConfig.pc_count++;
     else newConfig.ph_count++;
     saveConfig(newConfig);
-    releaseLock();
     updateUI();
     if ((currentPageType === 'pc' && newConfig.pc_count >= CONFIG.max_pc) || (currentPageType === 'ph' && newConfig.ph_count >= CONFIG.max_ph)) {
+      releaseLock();
       onTaskCompleted();
       return;
     }
@@ -738,7 +745,9 @@ const TASK_OWNER_KEY = 'bing_task_owner';
         executeSearch(kw);
       };
       tryNext(keyword);
+      releaseLock();
     }).catch(() => {
+      releaseLock();
       haltTask(STATUS_PAUSED);
       updateStatus('關鍵字載入失敗', '#d63031');
       updateStatusBadge(STATUS_PAUSED);
@@ -761,19 +770,28 @@ const TASK_OWNER_KEY = 'bing_task_owner';
       }
       updateStatus(`正在搜尋: ${keyword}`, "#0078d4");
       addSearchHistory(keyword);
-      setTimeout(() => {
-        try {
-          if (form) {
-            form.submit();
-          } else {
-            if (!btn) btn = document.querySelector("button.b_searchboxSubmit") || document.querySelector("a[title='Search']") || document.querySelector(".search_icon");
-            if (btn) btn.click();
+      let searchSubmitted = false;
+    setTimeout(() => {
+      try {
+        if (form) {
+          form.submit();
+          searchSubmitted = true;
+        } else {
+          if (!btn) btn = document.querySelector("button.b_searchboxSubmit") || document.querySelector("a[title='Search']") || document.querySelector(".search_icon");
+          if (btn) {
+            btn.click();
+            searchSubmitted = true;
           }
-        } catch (e) { }
-      }, 300);
-      setTimeout(() => {
+        }
+      } catch (e) { }
+      if (!searchSubmitted) {
         const loc = new URL(window.location.href);
-        if (isTaskRunning() && !(loc.pathname.startsWith('/search') && loc.search.startsWith('?'))) {
+        window.location.href = loc.origin + '/search?q=' + encodeURIComponent(keyword);
+      }
+    }, 300);
+    setTimeout(() => {
+      const loc = new URL(window.location.href);
+      if (isTaskRunning() && !loc.pathname.startsWith('/search') && searchSubmitted) {
           let fails = 0;
           try { fails = parseInt(sessionStorage.getItem('bing_redirect_fails') || '0'); } catch (e) { }
           if (fails >= 2) {
@@ -948,6 +966,20 @@ const TASK_OWNER_KEY = 'bing_task_owner';
     updateStatus('請登入後領取獎勵', '#d63031');
     return false;
   }
+  function trimKeywordHistory() {
+    if (usedKeywordsToday.size > MAX_KEYWORD_HISTORY) {
+      const excess = usedKeywordsToday.size - MAX_KEYWORD_HISTORY;
+      const toRemove = [...usedKeywordsToday].slice(0, excess);
+      toRemove.forEach(k => usedKeywordsToday.delete(k));
+    }
+  }
+  function cleanup() {
+    stopTimer();
+    stopAutoScroll();
+    releaseTask();
+    try { localStorage.removeItem('bing_auto_schedule'); } catch (e) { }
+    try { sessionStorage.removeItem(TASK_STATUS_KEY); } catch (e) { }
+  }
   async function getRandomKeyword() {
     if (bingNewsKeywords.length > 0) {
       const available = bingNewsKeywords.filter(k => !usedKeywordsToday.has(k));
@@ -960,13 +992,21 @@ const TASK_OWNER_KEY = 'bing_task_owner';
         }
         return keyword;
       } else {
-        usedKeywordsToday.clear();
+        if (usedKeywordsToday.size > 2) {
+          const recent = [...usedKeywordsToday].slice(-2);
+          usedKeywordsToday.clear();
+          usedKeywordsToday.add(recent[0]);
+          usedKeywordsToday.add(recent[1]);
+        } else {
+          usedKeywordsToday.clear();
+        }
         const keyword = bingNewsKeywords[Math.floor(Math.random() * bingNewsKeywords.length)];
         usedKeywordsToday.add(keyword);
         return keyword;
       }
     }
     const { chinese, english } = CONFIG.sourceWeight;
+    trimKeywordHistory();
     const roll = Math.random() * 100;
     if (roll < chinese) {
       return getRandomKeywordFromPool();
@@ -1018,95 +1058,66 @@ const TASK_OWNER_KEY = 'bing_task_owner';
   }
   async function getEnWordKeyword() {
     const { none, prefix, suffix, both } = CONFIG.enFixWeight;
-    let joke = null;
-    try { const c = JSON.parse(localStorage.getItem('bing_joke_cache') || '[]'); if (c.length > 0) { joke = c.shift(); localStorage.setItem('bing_joke_cache', JSON.stringify(c)); } } catch (e) { }
-    if (joke == null) {
-      try {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 5000);
-        const response = await fetch(JOKE_API_URL, { signal: controller.signal });
-        clearTimeout(timeoutId);
-        if (!response.ok) {
-          throw new Error('API 請求失敗: ' + response.status);
-        }
-        const data = await response.json();
-        const jokes = Array.isArray(data.jokes) ? data.jokes.map(j => j.joke).filter(j => j && j.trim()) : (data.joke ? [data.joke] : []);
-        if (jokes.length > 0) { joke = jokes.shift(); localStorage.setItem('bing_joke_cache', JSON.stringify(jokes)); }
-      } catch (e) { }
-    }
-    if (joke) {
-      const av = (w) => enWordFixPool.filter(f => !w.toLowerCase().includes(f.toLowerCase()));
-      const validWords = joke.split(/\s+/)
-        .map(word => word.replace(/[^a-zA-Z]/g, ''))
-        .filter(cleanWord => cleanWord.length >= 5);
-        if (validWords.length > 0) {
-          const wordCount = Math.floor(Math.random() * 3) + 1;
-          const selectedWords = [];
-          const pool = [...validWords];
-          for (let i = 0; i < wordCount && pool.length > 0; i++) {
-            selectedWords.push(pool.splice(Math.floor(Math.random() * pool.length), 1)[0]);
-          }
-          let enWord = selectedWords.join(' ');
-          for (let attempt = 0; attempt < 10; attempt++) {
-            const baseWord = selectedWords.join(' ');
-            const positionRoll = Math.random() * 100;
-            let tempEnWord = baseWord;
-            if (positionRoll >= none && positionRoll < none + prefix) {
-              const availableFixes = av(baseWord);
-              if (availableFixes.length === 0) continue;
-              const p = availableFixes[Math.floor(Math.random() * availableFixes.length)];
-              tempEnWord = `${p} ${baseWord}`;
-            } else if (positionRoll >= none + prefix && positionRoll < none + prefix + suffix) {
-              const availableFixes = av(baseWord);
-              if (availableFixes.length === 0) continue;
-              const f = availableFixes[Math.floor(Math.random() * availableFixes.length)];
-              tempEnWord = `${baseWord} ${f}`;
-            } else if (positionRoll >= none + prefix + suffix) {
-              const prefixPool = av(baseWord);
-              if (prefixPool.length < 2) continue;
-              const pi = Math.floor(Math.random() * prefixPool.length);
-              const p = prefixPool[pi];
-              const f = prefixPool[(pi + 1) % prefixPool.length];
-              tempEnWord = `${p} ${baseWord} ${f}`;
-            }
-            enWord = removeDuplicateWords(tempEnWord);
-            return enWord;
-          }
-          const positionRoll = Math.random() * 100;
-          if (positionRoll < none) {
-            return removeDuplicateWords(enWord);
-          } else if (positionRoll < none + prefix) {
-            const availableFixes = av(enWord);
-            if (availableFixes.length > 0) {
-              const p = availableFixes[Math.floor(Math.random() * availableFixes.length)];
-              return removeDuplicateWords(`${p} ${enWord}`);
-            }
-          } else if (positionRoll < none + prefix + suffix) {
-            const availableFixes = av(enWord);
-            if (availableFixes.length > 0) {
-              const f = availableFixes[Math.floor(Math.random() * availableFixes.length)];
-              return removeDuplicateWords(`${enWord} ${f}`);
-            }
-          }
-          return removeDuplicateWords(enWord);
-        }
+    const getWordFromPool = () => {
+      if (enWordFixPool.length === 0) return null;
+      return enWordFixPool[Math.floor(Math.random() * enWordFixPool.length)];
+    };
+    const av = (w) => enWordFixPool.filter(f => !w.toLowerCase().includes(f.toLowerCase()));
+    const baseWord = getWordFromPool();
+    if (!baseWord) return getRandomKeywordFromPool();
+    const positionRoll = Math.random() * 100;
+    if (positionRoll < none) {
+      return removeDuplicateWords(baseWord);
+    } else if (positionRoll < none + prefix) {
+      const fix = av(baseWord);
+      if (fix.length > 0) {
+        const p = fix[Math.floor(Math.random() * fix.length)];
+        return removeDuplicateWords(`${p} ${baseWord}`);
       }
-    return getRandomKeywordFromPool();
+    } else if (positionRoll < none + prefix + suffix) {
+      const fix = av(baseWord);
+      if (fix.length > 0) {
+        const f = fix[Math.floor(Math.random() * fix.length)];
+        return removeDuplicateWords(`${baseWord} ${f}`);
+      }
+    } else if (positionRoll < none + prefix + suffix + both) {
+      const fixPool = av(baseWord);
+      if (fixPool.length >= 2) {
+        const pi = Math.floor(Math.random() * fixPool.length);
+        const p = fixPool[pi];
+        const f = fixPool[(pi + 1) % fixPool.length];
+        return removeDuplicateWords(`${p} ${baseWord} ${f}`);
+      }
+    }
+    return removeDuplicateWords(baseWord);
   }
   if (/(^|\.)bing\.com$/i.test(window.location.hostname)) {
     init();
     let lastUrl = window.location.href;
-    const urlObserver = new MutationObserver(() => {
-      if (window.location.href !== lastUrl) {
-        lastUrl = window.location.href;
-        setTimeout(() => {
-          if (isTaskRunning() && window.location.pathname.includes('/search')) {
-            doAutoScroll();
-            startSearchLoop();
-          }
-        }, 3000);
-      }
-    });
-    urlObserver.observe(document.body, { childList: true, subtree: true });
+    const handleUrlChange = () => {
+      lastUrl = window.location.href;
+      setTimeout(() => {
+        if (isTaskRunning() && window.location.pathname.includes('/search')) {
+          doAutoScroll();
+          startSearchLoop();
+        }
+      }, 3000);
+    };
+    window.addEventListener('popstate', handleUrlChange);
+    const origPushState = history.pushState;
+    const origReplaceState = history.replaceState;
+    history.pushState = function (...args) {
+      const result = origPushState.apply(this, args);
+      handleUrlChange();
+      return result;
+    };
+    history.replaceState = function (...args) {
+      const result = origReplaceState.apply(this, args);
+      handleUrlChange();
+      return result;
+    };
+    window.addEventListener('beforeunload', cleanup);
+    window.addEventListener('freeze', cleanup);
+    window.addEventListener('pagehide', cleanup);
   }
 })();
