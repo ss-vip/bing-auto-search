@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         Bing Auto Search
-// @version      2026091402
+// @version      2026091701
 // @description  無人值守 Bing 自動隨機搜尋
 // @author       Hank
 // @match        https://*.bing.com/*
@@ -336,8 +336,7 @@ const TASK_OWNER_KEY = 'bing_task_owner';
   }
   async function init() {
     resetComboTracking();
-    await loadExternalKeywords();
-    await loadPanelKeywords();
+    await Promise.all([loadExternalKeywords(),loadPanelKeywords()]);
     const savedStatus = getTabTaskStatus();
     if (savedStatus && savedStatus !== STATUS_PAUSED) {
       setTabTaskStatus(savedStatus);
@@ -427,6 +426,9 @@ const TASK_OWNER_KEY = 'bing_task_owner';
     if (lastSeenDate === today) {
       if (taskStatus === STATUS_RESTING && canRunSearch(getConfig()) && claimTask()) {
         setTabTaskStatus(STATUS_RUNNING);
+        updateStatus("腳本運行中...", "#e67e22");
+        updateStatusBadge(STATUS_RUNNING);
+        setBtn("⏸ 暫停搜尋", "br_btn br_btn_stop");
         startSearchLoop();
         doAutoScroll();
       }
@@ -623,7 +625,7 @@ const TASK_OWNER_KEY = 'bing_task_owner';
       const raw = localStorage.getItem(key);
       if (!force && raw) {
         const o = JSON.parse(raw);
-        if (o.id !== tabId && Date.now() - o.ts < 15000) return false;
+        if (o.id !== tabId && Date.now() - o.ts < 30000) return false;
       }
       localStorage.setItem(key, JSON.stringify({ id: tabId, ts: Date.now() }));
       return true;
@@ -673,6 +675,7 @@ const TASK_OWNER_KEY = 'bing_task_owner';
       return;
     }
     setTabTaskStatus(STATUS_RUNNING);
+    saveConfig({...getConfig(),autoStart:true});
     setBtn("⏸ 暫停搜尋", "br_btn br_btn_stop");
     updateStatus("腳本運行中...", "#e67e22");
     startSearchLoop();
@@ -739,12 +742,12 @@ const TASK_OWNER_KEY = 'bing_task_owner';
     } catch (e) { }
   }
   function performSearch() {
-    if (!checkLoginStatus()) return;
+    if (!checkLoginStatus()) { updateCountdownUI("--"); return; }
     if (!isTaskRunning()) return;
-    const LOCK_KEY = 'bing_count_lock_' + getBingPageType();
+    const LOCK_KEY = 'bing_count_lock';
     try {
       const held = localStorage.getItem(LOCK_KEY);
-      if (held && Number(held) > Date.now() - 10000) return;
+      if (held && Number(held) > Date.now() - 10000) { startSearchLoop(); return; }
       localStorage.setItem(LOCK_KEY, String(Date.now()));
     } catch (e) { /* 忽略錯誤，單分頁場景直接執行 */ }
     const currentPageType = getBingPageType();
@@ -779,6 +782,7 @@ const TASK_OWNER_KEY = 'bing_task_owner';
     }).catch(() => {
       releaseLock();
       haltTask(STATUS_PAUSED);
+      updateCountdownUI("--");
       updateStatus('關鍵字載入失敗', '#d63031');
       updateStatusBadge(STATUS_PAUSED);
       setBtn("▶ 開始搜尋", "br_btn br_btn_start");
@@ -801,6 +805,7 @@ const TASK_OWNER_KEY = 'bing_task_owner';
       updateStatus(`正在搜尋: ${keyword}`, "#0078d4");
       addSearchHistory(keyword);
       let searchSubmitted = false;
+      const beforeUrl = window.location.href;
     setTimeout(() => {
       try {
         if (form) {
@@ -821,11 +826,12 @@ const TASK_OWNER_KEY = 'bing_task_owner';
     }, 300);
     setTimeout(() => {
       const loc = new URL(window.location.href);
-      if (isTaskRunning() && !loc.pathname.startsWith('/search') && searchSubmitted) {
+      if (isTaskRunning() && searchSubmitted && window.location.href === beforeUrl) {
           let fails = 0;
           try { fails = parseInt(sessionStorage.getItem('bing_redirect_fails') || '0'); } catch (e) { }
           if (fails >= 2) {
             haltTask(STATUS_PAUSED);
+            updateCountdownUI("--");
             updateStatus('載入失敗，請手動到 Bing 搜尋後重試', '#d63031');
             updateStatusBadge(STATUS_PAUSED);
             setBtn("▶ 開始搜尋", "br_btn br_btn_start");
@@ -834,6 +840,7 @@ const TASK_OWNER_KEY = 'bing_task_owner';
           }
           try { sessionStorage.setItem('bing_redirect_fails', String(fails + 1)); } catch (e) { }
           window.location.href = loc.origin + '/search?q=' + encodeURIComponent(keyword);
+          startSearchLoop();
         } else {
           try { sessionStorage.removeItem('bing_redirect_fails'); } catch (e) { }
         }
@@ -1088,13 +1095,9 @@ const TASK_OWNER_KEY = 'bing_task_owner';
   }
   async function getEnWordKeyword() {
     const { none, prefix, suffix, both } = CONFIG.enFixWeight;
-    const getWordFromPool = () => {
-      if (enWordFixPool.length === 0) return null;
-      return enWordFixPool[Math.floor(Math.random() * enWordFixPool.length)];
-    };
-    const av = (w) => enWordFixPool.filter(f => !w.toLowerCase().includes(f.toLowerCase()));
-    const baseWord = getWordFromPool();
-    if (!baseWord) return getRandomKeywordFromPool();
+    const baseWord = getUniqueKeywordFromPool();
+    if (enWordFixPool.length === 0) return removeDuplicateWords(baseWord);
+    const av = (w) => filterDuplicateFixes(w, enWordFixPool);
     const positionRoll = Math.random() * 100;
     if (positionRoll < none) {
       return removeDuplicateWords(baseWord);
@@ -1113,9 +1116,9 @@ const TASK_OWNER_KEY = 'bing_task_owner';
     } else if (positionRoll < none + prefix + suffix + both) {
       const fixPool = av(baseWord);
       if (fixPool.length >= 2) {
-        const pi = Math.floor(Math.random() * fixPool.length);
-        const p = fixPool[pi];
-        const f = fixPool[(pi + 1) % fixPool.length];
+        const p = fixPool[Math.floor(Math.random() * fixPool.length)];
+        let f = fixPool[Math.floor(Math.random() * fixPool.length)];
+        if (f === p) f = fixPool[(fixPool.indexOf(p) + 1) % fixPool.length];
         return removeDuplicateWords(`${p} ${baseWord} ${f}`);
       }
     }
