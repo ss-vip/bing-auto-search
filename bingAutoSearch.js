@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         Bing Auto Search
-// @version      2026091701
+// @version      2026091801
 // @description  無人值守 Bing 自動隨機搜尋
 // @author       Hank
 // @match        https://*.bing.com/*
@@ -659,7 +659,6 @@ const TASK_OWNER_KEY = 'bing_task_owner';
     }
   }
   function startSearch(force) {
-    if (!checkLoginStatus()) return;
     const config = getConfig();
     if (!claimTask(!!force)) {
       haltTask(STATUS_PAUSED);
@@ -742,7 +741,6 @@ const TASK_OWNER_KEY = 'bing_task_owner';
     } catch (e) { }
   }
   function performSearch() {
-    if (!checkLoginStatus()) { updateCountdownUI("--"); return; }
     if (!isTaskRunning()) return;
     const LOCK_KEY = 'bing_count_lock';
     try {
@@ -992,16 +990,6 @@ const TASK_OWNER_KEY = 'bing_task_owner';
     updateStatus(text || "任務已完成! 等待明日...", "#27ae60");
     updateCountdownUI("完成");
     updateStatusBadge(STATUS_RESTING);
-  }
-  function checkLoginStatus() {
-    const idP = document.querySelector('#id_p');
-    if (idP && idP.src && !/^data:/.test(idP.src)) return true;
-    const idN = document.querySelector('#id_n');
-    if (idN && idN.textContent.trim()) return true;
-    if (!document.querySelector('#id_a')) return true;
-    console.log('[BAS] 請登入後領取獎勵');
-    updateStatus('請登入後領取獎勵', '#d63031');
-    return false;
   }
   function trimKeywordHistory() {
     if (usedKeywordsToday.size > MAX_KEYWORD_HISTORY) {
