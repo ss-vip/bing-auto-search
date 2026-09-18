@@ -240,7 +240,7 @@ function createEnv(opts = {}) {
   return {
     api, advance, flush, pendingTimers, setMockNow, getMockNow,
     setUrl, hrefWrites, gm, gmJson, ls, ss, nullIds, qsMap, elements, inserted,
-    hooks, fetchCalls, listeners, setLoggedIn,
+    hooks, fetchCalls, listeners, setLoggedIn, doc: documentStub,
     reseed: (s) => seedRandom(s),
   };
 }

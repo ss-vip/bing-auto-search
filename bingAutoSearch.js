@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         Bing Auto Search
-// @version      2026091801
+// @version      2026091802
 // @description  無人值守 Bing 自動隨機搜尋
 // @author       Hank
 // @match        https://*.bing.com/*
@@ -158,7 +158,7 @@
   const KEYWORDS_CACHE_KEY = 'bing_keywords_cache';
   const TASK_STATUS_KEY = 'bing_task_status';
   const SEARCH_HISTORY_KEY = 'bing_search_history';
-  const MAX_HISTORY_RECORDS = 3;
+  const MAX_HISTORY_RECORDS = 1;
   const MAX_KEYWORD_HISTORY = 50;
   const WAKEUP_TRIGGER_KEY = 'bing_auto_wakeup';
 const TASK_OWNER_KEY = 'bing_task_owner';
@@ -173,25 +173,20 @@ const TASK_OWNER_KEY = 'bing_task_owner';
     return [];
   }
   function addSearchHistory(keyword) {
-    const history = getSearchHistory();
     const now = new Date();
     const record = {
       keyword: keyword,
       time: now.toLocaleString('zh-TW', { timeZone: CONFIG.timezone || undefined, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
     };
-    history.unshift(record);
-    if (history.length > 3) {
-      history.pop();
-    }
     try {
-      localStorage.setItem(SEARCH_HISTORY_KEY + '_' + getBingPageType(), JSON.stringify(history));
+      localStorage.setItem(SEARCH_HISTORY_KEY + '_' + getBingPageType(), JSON.stringify([record]));
     } catch (e) { }
     updateSearchHistoryUI();
   }
   function updateSearchHistoryUI() {
     const historyContainer = document.getElementById('br_history_content');
     if (!historyContainer) return;
-    const history = getSearchHistory();
+    const history = getSearchHistory().slice(0, MAX_HISTORY_RECORDS);
     if (history.length === 0) {
       historyContainer.innerHTML = '<div style="color: #999; font-size: 12px; text-align: center; padding: 8px;">尚無搜尋記錄</div>';
       return;
@@ -500,7 +495,7 @@ const TASK_OWNER_KEY = 'bing_task_owner';
 <button id="br_reset_btn" class="br_btn br_btn_reset">↺ 重置今日計數</button>
 <div class="br_history-accordion">
 <div class="br_history-header" id="br_history_header" role="button" tabindex="0" aria-expanded="false" aria-controls="br_history_content">
-<span>📜 最近搜尋記錄</span>
+<span>📜 前次搜尋紀錄</span>
 <span class="br_history-arrow">▼</span>
 </div>
 <div class="br_history-content" id="br_history_content">
@@ -825,8 +820,19 @@ const TASK_OWNER_KEY = 'bing_task_owner';
     setTimeout(() => {
       const loc = new URL(window.location.href);
       if (isTaskRunning() && searchSubmitted && window.location.href === beforeUrl) {
+        if (document.readyState !== 'complete') { startSearchLoop(); return; }
           let fails = 0;
           try { fails = parseInt(sessionStorage.getItem('bing_redirect_fails') || '0'); } catch (e) { }
+          try {
+            const _s = getStorageData();
+            if (_s && _s.lastDate === getToday()) {
+              const _t = getBingPageType();
+              if (_t === 'pc') _s.pc_count = Math.max(0, _s.pc_count - 1);
+              else _s.ph_count = Math.max(0, _s.ph_count - 1);
+              saveConfig(_s);
+            }
+          } catch (e) { }
+          updateUI();
           if (fails >= 2) {
             haltTask(STATUS_PAUSED);
             updateCountdownUI("--");

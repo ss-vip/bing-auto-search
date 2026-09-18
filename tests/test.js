@@ -183,6 +183,7 @@ async function t(name, fn) {
     ok('T12 forced redirect', env.hrefWrites.some((h) => h.includes('/search?q=') && !h.includes('q=old')), JSON.stringify(env.hrefWrites));
     ok('T12 loop recovered', api._state().timerActive === true);
     ok('T12 fail counted', env.ss.get('bing_redirect_fails') === '1');
+    ok('T12 failed attempt refunded', env.gmJson(GM_KEY).pc_count === 0, JSON.stringify(env.gmJson(GM_KEY)));
   });
 
   // ---------- T13: successful submit has no extra redirect ----------
@@ -213,6 +214,7 @@ async function t(name, fn) {
     ok('T14 paused', api._state().taskStatus === 'paused');
     ok('T14 countdown reset', env.elements.get('br_countdown').textContent === '--');
     ok('T14 fails cleared', env.ss.get('bing_redirect_fails') === undefined);
+    ok('T14 failed attempt refunded on pause', env.gmJson(GM_KEY).pc_count === 0, JSON.stringify(env.gmJson(GM_KEY)));
   });
 
   // ---------- T15: updateStatusAfterInit transition ----------
@@ -296,15 +298,15 @@ async function t(name, fn) {
     ok('T20 still running', api._state().taskStatus === 'running');
   });
 
-  // ---------- T21: search history capped + split by type ----------
-  await t('T21 history capped at 3 and split pc/ph', async () => {
+  // ---------- T21: history keeps only previous record + split by type ----------
+  await t('T21 history keeps only previous record, split pc/ph', async () => {
     const env = createEnv({ now: D18_08 });
     const { api } = env;
     api.addSearchHistory('kw1'); api.addSearchHistory('kw2');
     api.addSearchHistory('kw3'); api.addSearchHistory('kw4');
     const h = api.getSearchHistory();
-    ok('T21 capped', h.length === 3, String(h.length));
-    ok('T21 newest first', h[0].keyword === 'kw4');
+    ok('T21 only previous kept', h.length === 1, String(h.length));
+    ok('T21 newest kept', h[0].keyword === 'kw4');
     env.setUrl('https://m.bing.com/');
     ok('T21 ph separate', api.getSearchHistory().length === 0);
     api.addSearchHistory('m1');
@@ -370,6 +372,37 @@ async function t(name, fn) {
     await envB.advance(125000); await envB.flush();
     const end = envA.gmJson(GM_KEY);
     ok('T25 both quotas reach 1', end.pc_count === 1 && end.ph_count === 1, JSON.stringify(end));
+  });
+
+  // ---------- T26: slow navigation is not counted as failure ----------
+  await t('T26 loading page is retried without fail count', async () => {
+    const env = createEnv({ now: D18_08, url: 'https://www.bing.com/search?q=old&FORM=HDRS2' });
+    seedGM(env, { date: '2026-09-18', lastDate: '2026-09-18', pc_count: 0, ph_count: 0, autoStart: true });
+    env.hooks.formSubmit = () => {};
+    env.doc.readyState = 'loading'; // navigation still in flight
+    const { api } = env;
+    api._set({ taskStatus: 'running' });
+    api.performSearch();
+    await env.flush();
+    await env.advance(4300); await env.flush();
+    ok('T26 no fail counted', env.ss.get('bing_redirect_fails') === undefined);
+    ok('T26 no forced redirect', env.hrefWrites.length === 0, JSON.stringify(env.hrefWrites));
+    ok('T26 loop restarted', api._state().timerActive === true);
+    ok('T26 attempt kept (navigation pending)', env.gmJson(GM_KEY).pc_count === 1);
+  });
+
+  // ---------- T27: stale over-cap history is trimmed ----------
+  await t('T27 stale 5-record history renders and stores only 1', async () => {
+    const env = createEnv({ now: D18_08 });
+    const { api } = env;
+    const stale = ['s1', 's2', 's3', 's4', 's5'].map((k, i) => ({ keyword: k, time: 't' + i }));
+    env.ls.set('bing_search_history_pc', JSON.stringify(stale));
+    api.updateSearchHistoryUI();
+    const html = env.elements.get('br_history_content').innerHTML;
+    ok('T27 renders newest only', html.includes('s1') && !html.includes('s5'), html.slice(0, 200));
+    api.addSearchHistory('fresh');
+    const h = api.getSearchHistory();
+    ok('T27 stored trimmed to 1', h.length === 1 && h[0].keyword === 'fresh', JSON.stringify(h).slice(0, 200));
   });
 
   console.log(`\n${pass} passed, ${fail} failed`);
