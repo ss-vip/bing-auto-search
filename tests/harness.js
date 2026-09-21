@@ -12,7 +12,7 @@ const SRC = fs.readFileSync(path.join(__dirname, '..', 'bingAutoSearch.js'), 'ut
 const EXPORT_HOOK = `
 ;globalThis.__BAS__ = {
   getConfig, saveConfig, getStorageData, getToday, canRunSearch,
-  claimTask, releaseTask, heartbeatTask, checkAndResetDay,
+  checkAndResetDay,
   checkScheduledExecution, startSearch, startSearchLoop, stopTimer,
   performSearch, executeSearch, onTaskCompleted, toggleScript,
   getRandomKeyword, getRandomKeywordFromPool, getEnWordKeyword,
@@ -22,19 +22,18 @@ const EXPORT_HOOK = `
   resetComboTracking, clearUsedKeywords, addUsedFullKeyword, isFullKeywordUsed,
   getSearchHistory, addSearchHistory, updateSearchHistoryUI,
   updateStatusAfterInit, updateStatus, updateCountdownUI, updateUI, updateStatusBadge,
-  getBingPageType, isMobile, getRandomInterval,
+getBingPageType, isMobile, getRandomInterval, getWatchdogTimeout,
   cleanCount, doAutoScroll, startScrollLoop, haltTask, setBtn, showComplete,
   loadExternalKeywords, loadPanelKeywords, init,
   getTabTaskStatus, setTabTaskStatus, isTaskRunning,
   STATUS_PAUSED, STATUS_RUNNING, STATUS_RESTING, CONFIG,
   _state: () => ({ taskStatus, timerActive, timerStart, timerInterval, nextExecuteTime,
-    lastSeenDate, tabId, keywordsPool: [...keywordsPool], keywordFixPool: [...keywordFixPool],
+    lastSeenDate, keywordsPool: [...keywordsPool], keywordFixPool: [...keywordFixPool],
     enWordFixPool: [...enWordFixPool], bingNewsKeywords: [...bingNewsKeywords],
     usedKeywordsToday: [...usedKeywordsToday], usedFullKeywords: [...usedFullKeywords] }),
   _set: (p) => {
     if ('taskStatus' in p) setTabTaskStatus(p.taskStatus);
     if ('lastSeenDate' in p) { lastSeenDate = p.lastSeenDate; try { sessionStorage.setItem('bing_last_seen', p.lastSeenDate); } catch (e) {} }
-    if ('tabId' in p) { tabId = p.tabId; try { sessionStorage.setItem('bing_tab_id', p.tabId); } catch (e) {} }
     if ('bingNewsKeywords' in p) bingNewsKeywords = p.bingNewsKeywords;
     if ('keywordsPool' in p) keywordsPool = p.keywordsPool;
     if ('keywordFixPool' in p) keywordFixPool = p.keywordFixPool;
@@ -130,6 +129,7 @@ function createEnv(opts = {}) {
   const elements = new Map();
   const qsMap = new Map();
   const inserted = [];
+  const styles = [];
   const hooks = {
     keywordsJson: null, newsHtml: '<html></html>', parserTitles: [],
     formSubmit: null, elClick: null, confirm: true,
@@ -219,7 +219,7 @@ function createEnv(opts = {}) {
     localStorage: store(ls), sessionStorage: store(ss),
     document: documentStub, window: windowStub,
     navigator: { userAgent: opts.ua || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/126' },
-    GM_addStyle: (css) => { inserted.push('STYLE:' + css.length); },
+    GM_addStyle: (css) => { inserted.push('STYLE:' + css.length); styles.push(css); },
     GM_getValue: (k) => (gm.has(k) ? gm.get(k) : undefined),
     GM_setValue: (k, v) => { gm.set(k, v); },
     fetch: fetchStub, AbortController: AbortCtrl, DOMParser: DOMParserStub,
@@ -239,7 +239,7 @@ function createEnv(opts = {}) {
 
   return {
     api, advance, flush, pendingTimers, setMockNow, getMockNow,
-    setUrl, hrefWrites, gm, gmJson, ls, ss, nullIds, qsMap, elements, inserted,
+    setUrl, hrefWrites, gm, gmJson, ls, ss, nullIds, qsMap, elements, inserted, styles,
     hooks, fetchCalls, listeners, setLoggedIn, doc: documentStub,
     reseed: (s) => seedRandom(s),
   };

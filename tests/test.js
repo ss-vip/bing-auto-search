@@ -179,11 +179,10 @@ async function t(name, fn) {
     await env.flush();
     await env.advance(300); await env.flush();
     ok('T12 no premature redirect', env.hrefWrites.length === 0);
-    await env.advance(4000); await env.flush();
+    await env.advance(8300); await env.flush();
     ok('T12 forced redirect', env.hrefWrites.some((h) => h.includes('/search?q=') && !h.includes('q=old')), JSON.stringify(env.hrefWrites));
     ok('T12 loop recovered', api._state().timerActive === true);
-    ok('T12 fail counted', env.ss.get('bing_redirect_fails') === '1');
-    ok('T12 failed attempt refunded', env.gmJson(GM_KEY).pc_count === 0, JSON.stringify(env.gmJson(GM_KEY)));
+    ok('T12 attempt kept (no refund)', env.gmJson(GM_KEY).pc_count === 1, JSON.stringify(env.gmJson(GM_KEY)));
   });
 
   // ---------- T13: successful submit has no extra redirect ----------
@@ -195,26 +194,23 @@ async function t(name, fn) {
     await env.flush();
     await env.advance(300); await env.flush();
     ok('T13 submitted once', env.hrefWrites.length === 1, JSON.stringify(env.hrefWrites));
-    await env.advance(4000); await env.flush();
+    await env.advance(8300); await env.flush();
     ok('T13 no forced redirect', env.hrefWrites.length === 1);
-    ok('T13 fails cleared', env.ss.get('bing_redirect_fails') === undefined);
   });
 
-  // ---------- T14: two redirect fails pause the task ----------
-  await t('T14 repeated redirect failure pauses', async () => {
+  // ---------- T14: repeated redirect failures never pause, always recover ----------
+  await t('T14 repeated redirect failure keeps recovering', async () => {
     const env = createEnv({ now: D18_08, url: 'https://www.bing.com/search?q=old&FORM=HDRS2' });
     seedGM(env, { date: '2026-09-18', lastDate: '2026-09-18', pc_count: 0, ph_count: 0, autoStart: true });
     env.hooks.formSubmit = () => {};
-    env.ss.set('bing_redirect_fails', '2');
     const { api } = env;
     api._set({ taskStatus: 'running' });
     api.performSearch();
     await env.flush();
-    await env.advance(4300); await env.flush();
-    ok('T14 paused', api._state().taskStatus === 'paused');
-    ok('T14 countdown reset', env.elements.get('br_countdown').textContent === '--');
-    ok('T14 fails cleared', env.ss.get('bing_redirect_fails') === undefined);
-    ok('T14 failed attempt refunded on pause', env.gmJson(GM_KEY).pc_count === 0, JSON.stringify(env.gmJson(GM_KEY)));
+    await env.advance(8300); await env.flush();
+    ok('T14 still running', api._state().taskStatus === 'running');
+    ok('T14 forced redirect', env.hrefWrites.some((h) => h.includes('/search?q=') && !h.includes('q=old')), JSON.stringify(env.hrefWrites));
+    ok('T14 attempt kept (no refund)', env.gmJson(GM_KEY).pc_count === 1, JSON.stringify(env.gmJson(GM_KEY)));
   });
 
   // ---------- T15: updateStatusAfterInit transition ----------
@@ -241,25 +237,32 @@ async function t(name, fn) {
     ok('T16 pause label', env.elements.get('br_toggle_btn').textContent === '⏸ 暫停搜尋');
   });
 
-  // ---------- T17: task ownership across tabs ----------
-  await t('T17 claim/heartbeat/owner-expiry across tabs', async () => {
-    const envA = createEnv({ now: D18_08 });
-    const envB = createEnv({ now: D18_08, sharedLS: envA.ls });
-    const envC = createEnv({ now: D18_08, sharedLS: envA.ls });
-    envB.api._set({ tabId: 'tabB' });
-    envC.api._set({ tabId: 'tabC' });
-    ok('T17 A claims', envA.api.claimTask() === true);
-    envC.api.releaseTask(); // foreign id -> must not remove A's claim
-    ok('T17 foreign release ignored', envA.ls.has('bing_task_owner_pc'));
-    ok('T17 B blocked', envB.api.claimTask() === false);
-    envA.api.heartbeatTask();
-    await envB.advance(20000); await envB.flush();
-    ok('T17 B still blocked inside window', envB.api.claimTask() === false);
-    await envB.advance(15000); await envB.flush();
-    ok('T17 B takes over after expiry', envB.api.claimTask() === true);
-    ok('T17 ownership transferred', JSON.parse(envA.ls.get('bing_task_owner_pc')).id === 'tabB');
-    envB.api.releaseTask();
-    ok('T17 owner release clears', !envA.ls.has('bing_task_owner_pc'));
+  // ---------- T17: per-type slot lock serializes same-type tabs ----------
+  await t('T17 slot lock serializes same-type, allows cross-type', async () => {
+    const sharedGM = new Map(), sharedLS = new Map();
+    const envA = createEnv({ now: D18_08, url: 'https://www.bing.com/', sharedGM, sharedLS, seed: 11 });
+    const envB = createEnv({ now: D18_08, url: 'https://www.bing.com/', sharedGM, sharedLS, seed: 22 });
+    seedGM(envA, { date: '2026-09-18', lastDate: '2026-09-18', pc_count: 0, ph_count: 0, autoStart: true });
+    envA.api._set({ taskStatus: 'running' });
+    envB.api._set({ taskStatus: 'running' });
+    envA.api.performSearch();
+    await envA.flush();
+    ok('T17 A counted', envA.gmJson(GM_KEY).pc_count === 1, JSON.stringify(envA.gmJson(GM_KEY)));
+    envB.api.performSearch(); // within slot window -> reschedule, no count
+    await envB.flush();
+    ok('T17 B blocked by slot', envB.gmJson(GM_KEY).pc_count === 1, JSON.stringify(envB.gmJson(GM_KEY)));
+    ok('T17 B loop alive', envB.api._state().timerActive === true);
+    envB.api.stopTimer();
+    await envB.advance(51000); await envB.flush();
+    envB.api.performSearch();
+    await envB.flush();
+    ok('T17 B counted after slot expiry', envB.gmJson(GM_KEY).pc_count === 2, JSON.stringify(envB.gmJson(GM_KEY)));
+    const envC = createEnv({ now: D18_08, url: 'https://m.bing.com/', sharedGM, sharedLS, seed: 33 });
+    seedGM(envC, { date: '2026-09-18', lastDate: '2026-09-18', pc_count: 2, ph_count: 0, autoStart: true });
+    envC.api._set({ taskStatus: 'running' });
+    envC.api.performSearch();
+    await envC.flush();
+    ok('T17 ph not blocked by pc slot', envC.gmJson(GM_KEY).ph_count === 1, JSON.stringify(envC.gmJson(GM_KEY)));
   });
 
   // ---------- T18: date handling across midnight Taipei time ----------
@@ -355,8 +358,8 @@ async function t(name, fn) {
     ok('T24 desktop UA is pc', env2.api.getBingPageType() === 'pc');
   });
 
-  // ---------- T25: pc + ph tabs share GM without clobbering ----------
-  await t('T25 pc+ph tabs coexist without clobbering counts', async () => {
+  // ---------- T25: pc + ph tabs run in parallel via separate slots ----------
+  await t('T25 pc+ph tabs run in parallel without clobbering', async () => {
     const sharedGM = new Map(), sharedLS = new Map();
     const envA = createEnv({ now: D18_08, url: 'https://www.bing.com/', sharedGM, sharedLS, seed: 11 });
     const envB = createEnv({ now: D18_08, url: 'https://m.bing.com/', sharedGM, sharedLS, seed: 22 });
@@ -364,18 +367,17 @@ async function t(name, fn) {
     envA.api._set({ taskStatus: 'running' });
     envB.api._set({ taskStatus: 'running' });
     envA.api.performSearch();
-    envB.api.performSearch(); // collides on the global count lock -> reschedules
+    envB.api.performSearch(); // separate per-type slots -> both count
     await envA.flush(); await envB.flush();
-    await envA.advance(500); await envA.flush();
     const mid = envA.gmJson(GM_KEY);
-    ok('T25 one counted, none lost', (mid.pc_count + mid.ph_count) === 1, JSON.stringify(mid));
+    ok('T25 both counted in parallel', mid.pc_count === 1 && mid.ph_count === 1, JSON.stringify(mid));
     await envB.advance(125000); await envB.flush();
     const end = envA.gmJson(GM_KEY);
     ok('T25 both quotas reach 1', end.pc_count === 1 && end.ph_count === 1, JSON.stringify(end));
   });
 
-  // ---------- T26: slow navigation is not counted as failure ----------
-  await t('T26 loading page is retried without fail count', async () => {
+  // ---------- T26: slow navigation with failed submit counts as failure ----------
+  await t('T26 loading page failed submit recovers via redirect', async () => {
     const env = createEnv({ now: D18_08, url: 'https://www.bing.com/search?q=old&FORM=HDRS2' });
     seedGM(env, { date: '2026-09-18', lastDate: '2026-09-18', pc_count: 0, ph_count: 0, autoStart: true });
     env.hooks.formSubmit = () => {};
@@ -384,11 +386,10 @@ async function t(name, fn) {
     api._set({ taskStatus: 'running' });
     api.performSearch();
     await env.flush();
-    await env.advance(4300); await env.flush();
-    ok('T26 no fail counted', env.ss.get('bing_redirect_fails') === undefined);
-    ok('T26 no forced redirect', env.hrefWrites.length === 0, JSON.stringify(env.hrefWrites));
+    await env.advance(8300); await env.flush();
+    ok('T26 forced redirect', env.hrefWrites.some((h) => h.includes('/search?q=') && !h.includes('q=old')), JSON.stringify(env.hrefWrites));
     ok('T26 loop restarted', api._state().timerActive === true);
-    ok('T26 attempt kept (navigation pending)', env.gmJson(GM_KEY).pc_count === 1);
+    ok('T26 attempt kept (no refund)', env.gmJson(GM_KEY).pc_count === 1, JSON.stringify(env.gmJson(GM_KEY)));
   });
 
   // ---------- T27: stale over-cap history is trimmed ----------
@@ -403,6 +404,92 @@ async function t(name, fn) {
     api.addSearchHistory('fresh');
     const h = api.getSearchHistory();
     ok('T27 stored trimmed to 1', h.length === 1 && h[0].keyword === 'fresh', JSON.stringify(h).slice(0, 200));
+  });
+
+  // ---------- T29: cross-day auto-start works from paused ----------
+  await t('T29 cross-day paused task auto-starts', async () => {
+    const env = createEnv({ now: D18_08 });
+    seedGM(env, { date: '2026-09-17', lastDate: '2026-09-17', pc_count: 45, ph_count: 35, autoStart: true });
+    const { api } = env;
+    api._set({ lastSeenDate: '2026-09-17', taskStatus: 'paused' });
+    api.checkAndResetDay();
+    ok('T29 resumed from paused', api._state().taskStatus === 'running');
+    ok('T29 loop active', api._state().timerActive === true);
+    const env2 = createEnv({ now: D18_08 });
+    seedGM(env2, { date: '2026-09-18', lastDate: '2026-09-18', pc_count: 0, ph_count: 0, autoStart: true });
+    env2.api._set({ lastSeenDate: '2026-09-18', taskStatus: 'paused' });
+    env2.api.checkAndResetDay();
+    ok('T29 same-day paused stays paused', env2.api._state().taskStatus === 'paused');
+  });
+
+  // ---------- T30: hidden-tab backoff is dynamic ----------
+  await t('T30 hidden backoff extends interval, shrinks when visible', async () => {
+    const env = createEnv({ now: D18_08 });
+    seedGM(env, { date: '2026-09-18', lastDate: '2026-09-18', pc_count: 0, ph_count: 0, autoStart: true });
+    const { api } = env;
+    api._set({ taskStatus: 'running' });
+    env.doc.hidden = true;
+    api.startSearchLoop();
+    const base = api._state().timerInterval;
+    ok('T30 base interval in range', base >= 50000 && base <= 120000, String(base));
+    const now = env.getMockNow();
+    ok('T30 hidden extends to 3x', api._state().nextExecuteTime - now === Math.ceil(base * 3 / 1000) * 1000, String(api._state().nextExecuteTime - now));
+    env.doc.hidden = false;
+    await env.advance(1000); await env.flush();
+    const now2 = env.getMockNow();
+    const rem = api._state().nextExecuteTime - now2;
+    ok('T30 visible shrinks to ~1x', rem > 0 && rem <= base, String(rem));
+  });
+
+  // ---------- T31: slot lock cleared on halt ----------
+  await t('T31 halt clears per-type slot lock', async () => {
+    const env = createEnv({ now: D18_08 });
+    seedGM(env, { date: '2026-09-18', lastDate: '2026-09-18', pc_count: 0, ph_count: 0, autoStart: true });
+    const { api } = env;
+    api._set({ taskStatus: 'running' });
+    api.performSearch();
+    await env.flush();
+    ok('T31 slot acquired', env.ls.has('bing_slot_pc'), JSON.stringify([...env.ls.keys()]));
+    api.haltTask('paused');
+    ok('T31 slot cleared on halt', !env.ls.has('bing_slot_pc'), JSON.stringify([...env.ls.keys()]));
+  });
+
+  // ---------- T32: watchdog timeout scales with min_interval ----------
+  await t('T32 watchdog timeout dynamic', async () => {
+    const env = createEnv({ now: D18_08 });
+    const { api } = env;
+    api.CONFIG.min_interval = 50;
+    ok('T32 default caps at 8000', api.getWatchdogTimeout() === 8000, String(api.getWatchdogTimeout()));
+    api.CONFIG.min_interval = 10;
+    ok('T32 10s -> 8000', api.getWatchdogTimeout() === 8000, String(api.getWatchdogTimeout()));
+    api.CONFIG.min_interval = 5;
+    ok('T32 5s -> 4000', api.getWatchdogTimeout() === 4000, String(api.getWatchdogTimeout()));
+    api.CONFIG.min_interval = 2;
+    ok('T32 2s -> 1000', api.getWatchdogTimeout() === 1000, String(api.getWatchdogTimeout()));
+    api.CONFIG.min_interval = 1;
+    ok('T32 1s -> floor 1000', api.getWatchdogTimeout() === 1000, String(api.getWatchdogTimeout()));
+    const env2 = createEnv({ now: D18_08, url: 'https://www.bing.com/search?q=old&FORM=HDRS2' });
+    seedGM(env2, { date: '2026-09-18', lastDate: '2026-09-18', pc_count: 0, ph_count: 0, autoStart: true });
+    env2.hooks.formSubmit = () => {};
+    env2.api.CONFIG.min_interval = 5;
+    env2.api._set({ taskStatus: 'running' });
+    env2.api.performSearch();
+    await env2.flush();
+    await env2.advance(4300); await env2.flush();
+    ok('T32 watchdog fires at 4s', env2.hrefWrites.some((h) => h.includes('/search?q=') && !h.includes('q=old')), JSON.stringify(env2.hrefWrites));
+  });
+
+  // ---------- T33: minimized ball forced to bottom-right corner ----------
+  await t('T33 minimized ball forced to corner', async () => {
+    const env = createEnv({ now: D18_08 });
+    await env.api.init();
+    const css = env.styles.join('\n');
+    const rule = css.match(/#br_reward_tool\.br_minimized\{[^}]*\}/);
+    ok('T33 minimized rule exists', !!rule, String(rule));
+    ok('T33 right forced 30px', rule[0].includes('right:30px !important'), rule[0]);
+    ok('T33 bottom forced 50px', rule[0].includes('bottom:50px !important'), rule[0]);
+    ok('T33 no dragging cursor', !css.includes('cursor:move'), css);
+    ok('T33 no br_dragging rule', !css.includes('br_dragging'), css);
   });
 
   console.log(`\n${pass} passed, ${fail} failed`);

@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         Bing Auto Search
-// @version      2026091802
+// @version      2026092101
 // @description  無人值守 Bing 自動隨機搜尋
 // @author       Hank
 // @match        https://*.bing.com/*
@@ -161,7 +161,6 @@
   const MAX_HISTORY_RECORDS = 1;
   const MAX_KEYWORD_HISTORY = 50;
   const WAKEUP_TRIGGER_KEY = 'bing_auto_wakeup';
-const TASK_OWNER_KEY = 'bing_task_owner';
   const STATUS_PAUSED = 'paused';
   const STATUS_RUNNING = 'running';
   const STATUS_RESTING = 'resting';
@@ -204,18 +203,16 @@ const TASK_OWNER_KEY = 'bing_task_owner';
     return div.innerHTML;
   }
   let taskStatus = STATUS_PAUSED;
+  let lastTaskStatus = taskStatus;
   let timerStart = 0;
   let timerInterval = 0;
   let timerActive = false;
   let timerHandle = null;
-  let isDragging = false;
-  let dragX = 0, dragY = 0;
+
   let checkInterval = null;
   let nextExecuteTime = 0;
   let scrollInterval = null;
   let scrollTimeout = null;
-  let tabId = sessionStorage.getItem('bing_tab_id') || Math.random().toString(36).slice(2);
-  try { sessionStorage.setItem('bing_tab_id', tabId); } catch (e) { }
   let lastSeenDate = sessionStorage.getItem('bing_last_seen') || getToday();
   try { sessionStorage.setItem('bing_last_seen', lastSeenDate); } catch (e) { }
   function getTabTaskStatus() {
@@ -358,13 +355,6 @@ const TASK_OWNER_KEY = 'bing_task_owner';
     }, 3000);
     if (document.readyState === 'complete') startScroll();
     else window.addEventListener('load', startScroll, { once: true });
-    let lastTaskStatus = taskStatus;
-    setInterval(() => {
-      if (lastTaskStatus !== taskStatus) {
-        lastTaskStatus = taskStatus;
-        updateStatusBadge(taskStatus);
-      }
-    }, 500);
   }
   function startKeepAlive() {
     document.addEventListener('visibilitychange', handleVisibilityChange);
@@ -373,7 +363,10 @@ const TASK_OWNER_KEY = 'bing_task_owner';
     checkInterval = setInterval(() => {
       checkAndResetDay();
       checkScheduledExecution();
-      heartbeatTask();
+      if (lastTaskStatus !== taskStatus) {
+        lastTaskStatus = taskStatus;
+        updateStatusBadge(taskStatus);
+      }
       updateUI();
     }, 10000);
   }
@@ -409,7 +402,7 @@ const TASK_OWNER_KEY = 'bing_task_owner';
     }
     if (isTaskRunning() && scheduledTime === 0) {
       const elapsed = Date.now() - timerStart;
-      const remaining = timerInterval - elapsed;
+      const remaining = (timerInterval * (document.hidden ? 3 : 1)) - elapsed;
       if (remaining > 0) {
         nextExecuteTime = now + remaining;
         saveScheduleTime(nextExecuteTime);
@@ -419,7 +412,7 @@ const TASK_OWNER_KEY = 'bing_task_owner';
   function checkAndResetDay() {
     const today = getToday();
     if (lastSeenDate === today) {
-      if (taskStatus === STATUS_RESTING && canRunSearch(getConfig()) && claimTask()) {
+      if (taskStatus === STATUS_RESTING && canRunSearch(getConfig())) {
         setTabTaskStatus(STATUS_RUNNING);
         updateStatus("腳本運行中...", "#e67e22");
         updateStatusBadge(STATUS_RUNNING);
@@ -441,7 +434,7 @@ const TASK_OWNER_KEY = 'bing_task_owner';
       updateStatus("跨天重置成功! 任務進行中...", "#e67e22");
       console.log('[BAS] 跨天重置完成');
     }
-    if (taskStatus === STATUS_RESTING && claimTask()) {
+    if (taskStatus !== STATUS_RUNNING && canRunSearch(getConfig())) {
       setTabTaskStatus(STATUS_RUNNING);
       updateStatus("腳本運行中...", "#e67e22");
       updateStatusBadge(STATUS_RUNNING);
@@ -472,7 +465,7 @@ const TASK_OWNER_KEY = 'bing_task_owner';
     return (currentPageType === 'pc' && config.pc_count < CONFIG.max_pc) || (currentPageType === 'ph' && config.ph_count < CONFIG.max_ph);
   }
   function initStyles() {
-    GM_addStyle(`#br_reward_tool{position:fixed;right:30px;bottom:30px;left:auto;top:auto;background:#fff;padding:0;border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,0.15);width:260px;z-index:9999999;cursor:default;user-select:none;border:1px solid #dcdcdc;box-sizing:border-box;text-align:left;line-height:1.5;color:#333}#br_reward_tool *{box-sizing:border-box}.br_header{position:relative;height:40px;border-top-left-radius:8px;border-top-right-radius:8px;background:#f5f5f5;border-bottom:1px solid #e0e0e0;display:flex;align-items:center;justify-content:space-between;padding:0 12px;cursor:move;width:100%}.br_title{font-size:14px;font-weight:600;color:#444}.br_date{font-size:11px;color:#888;margin-left:8px;font-weight:normal}.br_minimize-btn{border:none;background:none;cursor:pointer;font-size:20px;color:#666;padding:0;width:24px;height:24px;display:flex;align-items:center;justify-content:center}.br_minimize-btn:hover{color:#0078d4;background:#e0e0e0;border-radius:4px}.br_panel-content{padding:15px;background:#fff;border-bottom-left-radius:8px;border-bottom-right-radius:8px}.br_btn{display:block;width:100%;margin:8px 0;padding:8px 0;color:#fff;border-radius:4px;text-align:center;font-weight:600;text-decoration:none;font-size:14px;cursor:pointer;border:none;outline:none}.br_btn_start{background:#0078d4}.br_btn_start:hover{background:#005bb5}.br_btn_stop{background:#d63031}.br_btn_stop:hover{background:#c0392b}.br_btn_reset{background:#f0f0f0;color:#333 !important;border:1px solid #ccc !important;font-weight:normal !important;margin-top:10px}.br_btn_reset:hover{background:#e0e0e0}#br_reward_tool p{margin:8px 0;color:#444;font-size:13px;display:flex;justify-content:space-between;align-items:center}.br_count{font-weight:bold;color:#0078d4;font-size:14px}#br_status_text{color:#666;font-size:12px;margin-top:12px;text-align:center;display:block;background:#f9f9f9;padding:4px;border-radius:4px}#br_countdown{color:#e67e22;font-weight:bold}#br_reward_tool.br_minimized{width:50px !important;height:50px !important;padding:0 !important;background:transparent !important;box-shadow:none !important;border:none !important;right:30px !important;bottom:50px !important}#br_reward_tool.br_minimized .br_header,#br_reward_tool.br_minimized .br_panel-content{display:none !important}.br_mini-icon{width:50px;height:50px;border-radius:50%;background:#0078d4;display:flex;align-items:center;justify-content:center;color:#fff;font-size:12px;cursor:pointer;box-shadow:0 4px 12px rgba(0,0,0,0.3);font-weight:bold;border:2px solid #fff;text-align:center;line-height:1.2}.br_mini-icon:hover{background:#005bb5}#br_reward_tool:not(.br_minimized) .br_mini-icon{display:none}.br_mini-icon.running{background:#d63031}.br_live-indicator{display:inline-block;width:8px;height:8px;border-radius:50%;background:#27ae60;margin-right:6px}.br_mini-icon.paused{background:#0078d4}.br_mini-icon.resting{background:#27ae60}.br_status-badge{display:inline-block;font-size:10px;padding:2px 6px;border-radius:3px;margin-left:6px;vertical-align:middle}.br_status-badge.paused{background:#666;color:#fff}.br_status-badge.running{background:#e67e22;color:#fff}.br_status-badge.resting{background:#27ae60;color:#fff}.br_history-accordion{margin-top:12px;border:1px solid #e0e0e0;border-radius:6px;overflow:hidden}.br_history-header{display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:#f9f9f9;cursor:pointer;font-size:13px;font-weight:500;color:#444;user-select:none}.br_history-header:hover{background:#f0f0f0}.br_divider{border-top:1px solid #eee;margin:10px 0}.br_history-arrow{font-size:10px;color:#888}.br_history-header.expanded .br_history-arrow{transform:rotate(180deg)}.br_history-content{display:none;max-height:200px;overflow-y:auto;background:#fff;padding:8px 12px}.br_history-content.show{display:block}#br_reward_tool.br_dragging,#br_reward_tool.br_dragging *{cursor:move !important}.br_btn:focus-visible,.br_minimize-btn:focus-visible{outline:2px solid #0078d4;outline-offset:2px}.br_panel-content{max-height:calc(100vh - 120px);overflow-y:auto}`);
+    GM_addStyle(`#br_reward_tool{position:fixed;right:30px;bottom:30px;left:auto;top:auto;background:#fff;padding:0;border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,0.15);width:260px;z-index:9999999;cursor:default;user-select:none;border:1px solid #dcdcdc;box-sizing:border-box;text-align:left;line-height:1.5;color:#333}#br_reward_tool *{box-sizing:border-box}.br_header{position:relative;height:40px;border-top-left-radius:8px;border-top-right-radius:8px;background:#f5f5f5;border-bottom:1px solid #e0e0e0;display:flex;align-items:center;justify-content:space-between;padding:0 12px;cursor:default;width:100%}.br_title{font-size:14px;font-weight:600;color:#444}.br_date{font-size:11px;color:#888;margin-left:8px;font-weight:normal}.br_minimize-btn{border:none;background:none;cursor:pointer;font-size:20px;color:#666;padding:0;width:24px;height:24px;display:flex;align-items:center;justify-content:center}.br_minimize-btn:hover{color:#0078d4;background:#e0e0e0;border-radius:4px}.br_panel-content{padding:15px;background:#fff;border-bottom-left-radius:8px;border-bottom-right-radius:8px}.br_btn{display:block;width:100%;margin:8px 0;padding:8px 0;color:#fff;border-radius:4px;text-align:center;font-weight:600;text-decoration:none;font-size:14px;cursor:pointer;border:none;outline:none}.br_btn_start{background:#0078d4}.br_btn_start:hover{background:#005bb5}.br_btn_stop{background:#d63031}.br_btn_stop:hover{background:#c0392b}.br_btn_reset{background:#f0f0f0;color:#333 !important;border:1px solid #ccc !important;font-weight:normal !important;margin-top:10px}.br_btn_reset:hover{background:#e0e0e0}#br_reward_tool p{margin:8px 0;color:#444;font-size:13px;display:flex;justify-content:space-between;align-items:center}.br_count{font-weight:bold;color:#0078d4;font-size:14px}#br_status_text{color:#666;font-size:12px;margin-top:12px;text-align:center;display:block;background:#f9f9f9;padding:4px;border-radius:4px}#br_countdown{color:#e67e22;font-weight:bold}#br_reward_tool.br_minimized{width:50px !important;height:50px !important;padding:0 !important;background:transparent !important;box-shadow:none !important;border:none !important;right:30px !important;bottom:50px !important}#br_reward_tool.br_minimized .br_header,#br_reward_tool.br_minimized .br_panel-content{display:none !important}.br_mini-icon{width:50px;height:50px;border-radius:50%;background:#0078d4;display:flex;align-items:center;justify-content:center;color:#fff;font-size:12px;cursor:pointer;box-shadow:0 4px 12px rgba(0,0,0,0.3);font-weight:bold;border:2px solid #fff;text-align:center;line-height:1.2}.br_mini-icon:hover{background:#005bb5}#br_reward_tool:not(.br_minimized) .br_mini-icon{display:none}.br_mini-icon.running{background:#d63031}.br_live-indicator{display:inline-block;width:8px;height:8px;border-radius:50%;background:#27ae60;margin-right:6px}.br_mini-icon.paused{background:#0078d4}.br_mini-icon.resting{background:#27ae60}.br_status-badge{display:inline-block;font-size:10px;padding:2px 6px;border-radius:3px;margin-left:6px;vertical-align:middle}.br_status-badge.paused{background:#666;color:#fff}.br_status-badge.running{background:#e67e22;color:#fff}.br_status-badge.resting{background:#27ae60;color:#fff}.br_history-accordion{margin-top:12px;border:1px solid #e0e0e0;border-radius:6px;overflow:hidden}.br_history-header{display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:#f9f9f9;cursor:pointer;font-size:13px;font-weight:500;color:#444;user-select:none}.br_history-header:hover{background:#f0f0f0}.br_divider{border-top:1px solid #eee;margin:10px 0}.br_history-arrow{font-size:10px;color:#888}.br_history-header.expanded .br_history-arrow{transform:rotate(180deg)}.br_history-content{display:none;max-height:200px;overflow-y:auto;background:#fff;padding:8px 12px}.br_history-content.show{display:block}br_btn:focus-visible,.br_minimize-btn:focus-visible{outline:2px solid #0078d4;outline-offset:2px}.br_panel-content{max-height:calc(100vh - 120px);overflow-y:auto}`);
 
   }
   function initUI() {
@@ -522,7 +515,6 @@ const TASK_OWNER_KEY = 'bing_task_owner';
       resetBtn.onclick = () => { cleanCount(toolBox); };
       const minBtn = toolBox.querySelector('.br_minimize-btn');
       const miniIcon = toolBox.querySelector('.br_mini-icon');
-      const header = toolBox.querySelector('.br_header');
       minBtn.onmousedown = (e) => { e.stopPropagation(); };
       minBtn.onclick = (e) => {
         e.stopPropagation();
@@ -533,52 +525,6 @@ const TASK_OWNER_KEY = 'bing_task_owner';
         e.stopPropagation();
         toolBox.classList.remove('br_minimized');
       };
-      header.onmousedown = (e) => {
-        e.preventDefault();
-        isDragging = true;
-        toolBox.classList.add('br_dragging');
-        dragX = e.clientX - toolBox.offsetLeft;
-        dragY = e.clientY - toolBox.offsetTop;
-      };
-      document.addEventListener('mousemove', (e) => {
-        if (!isDragging) return;
-        e.preventDefault();
-        let l = e.clientX - dragX;
-        let t = e.clientY - dragY;
-        l = Math.max(0, Math.min(window.innerWidth - toolBox.offsetWidth, l));
-        t = Math.max(0, Math.min(window.innerHeight - toolBox.offsetHeight, t));
-        toolBox.style.left = l + 'px';
-        toolBox.style.top = t + 'px';
-        toolBox.style.right = 'auto';
-        toolBox.style.bottom = 'auto';
-      });
-      document.addEventListener('mouseup', () => {
-        isDragging = false;
-        toolBox.classList.remove('br_dragging');
-      });
-      header.addEventListener('touchstart', (e) => {
-        const touch = e.touches[0];
-        isDragging = true;
-        toolBox.classList.add('br_dragging');
-        dragX = touch.clientX - toolBox.offsetLeft;
-        dragY = touch.clientY - toolBox.offsetTop;
-      }, { passive: true });
-      document.addEventListener('touchmove', (e) => {
-        if (!isDragging) return;
-        const touch = e.touches[0];
-        let l = touch.clientX - dragX;
-        let t = touch.clientY - dragY;
-        l = Math.max(0, Math.min(window.innerWidth - toolBox.offsetWidth, l));
-        t = Math.max(0, Math.min(window.innerHeight - toolBox.offsetHeight, t));
-        toolBox.style.left = l + 'px';
-        toolBox.style.top = t + 'px';
-        toolBox.style.right = 'auto';
-        toolBox.style.bottom = 'auto';
-      }, { passive: true });
-      document.addEventListener('touchend', () => {
-        isDragging = false;
-        toolBox.classList.remove('br_dragging');
-      });
       const historyHeader = document.getElementById('br_history_header');
       const historyContent = document.getElementById('br_history_content');
       if (historyHeader && historyContent) {
@@ -611,37 +557,6 @@ const TASK_OWNER_KEY = 'bing_task_owner';
       updateStatusBadge(STATUS_RUNNING);
     }
   }
-  function getTaskOwnerKey() {
-    return TASK_OWNER_KEY + '_' + getBingPageType();
-  }
-  function claimTask(force) {
-    try {
-      const key = getTaskOwnerKey();
-      const raw = localStorage.getItem(key);
-      if (!force && raw) {
-        const o = JSON.parse(raw);
-        if (o.id !== tabId && Date.now() - o.ts < 30000) return false;
-      }
-      localStorage.setItem(key, JSON.stringify({ id: tabId, ts: Date.now() }));
-      return true;
-    } catch (e) { return true; }
-  }
-  function releaseTask() {
-    try {
-      const key = getTaskOwnerKey();
-      const raw = localStorage.getItem(key);
-      if (raw) {
-        const o = JSON.parse(raw);
-        if (o.id === tabId) localStorage.removeItem(key);
-      }
-    } catch (e) { }
-  }
-  function heartbeatTask() {
-    if (!isTaskRunning()) return;
-    try {
-      localStorage.setItem(getTaskOwnerKey(), JSON.stringify({ id: tabId, ts: Date.now() }));
-    } catch (e) { }
-  }
   function toggleScript() {
     if (isTaskRunning()) {
       haltTask(STATUS_PAUSED);
@@ -650,17 +565,11 @@ const TASK_OWNER_KEY = 'bing_task_owner';
       updateCountdownUI("--");
       updateStatusBadge(STATUS_PAUSED);
     } else {
-      startSearch(true);
+      startSearch();
     }
   }
-  function startSearch(force) {
+  function startSearch() {
     const config = getConfig();
-    if (!claimTask(!!force)) {
-      haltTask(STATUS_PAUSED);
-      updateStatus("其他分頁正在執行任務", "#e67e22");
-      updateStatusBadge(STATUS_PAUSED);
-      return;
-    }
     const currentPageType = getBingPageType();
     const atMax = (currentPageType === 'pc' && config.pc_count >= CONFIG.max_pc) || (currentPageType === 'ph' && config.ph_count >= CONFIG.max_ph);
     if (atMax) {
@@ -684,9 +593,10 @@ const TASK_OWNER_KEY = 'bing_task_owner';
     if (currentPageType === 'ph' && config.ph_count >= CONFIG.max_ph) { onTaskCompleted(); return; }
     timerStart = Date.now();
     timerInterval = getRandomInterval();
-    nextExecuteTime = Date.now() + timerInterval;
+    const effectiveInterval = timerInterval * (document.hidden ? 3 : 1);
+    nextExecuteTime = Date.now() + effectiveInterval;
     saveScheduleTime(nextExecuteTime);
-    updateCountdownUI(Math.ceil(timerInterval / 1000));
+    updateCountdownUI(Math.ceil(effectiveInterval / 1000));
     timerActive = true;
     timerLoop();
   }
@@ -706,8 +616,9 @@ const TASK_OWNER_KEY = 'bing_task_owner';
       stopTimer();
       return;
     }
+    const effectiveInterval = timerInterval * (document.hidden ? 3 : 1);
     const elapsed = Date.now() - timerStart;
-    const remaining = Math.max(0, Math.ceil((timerInterval - elapsed) / 1000));
+    const remaining = Math.max(0, Math.ceil((effectiveInterval - elapsed) / 1000));
     if (remaining !== lastSecondUpdate) {
       lastSecondUpdate = remaining;
       updateCountdownUI(remaining);
@@ -716,7 +627,7 @@ const TASK_OWNER_KEY = 'bing_task_owner';
         saveScheduleTime(nextExecuteTime);
       }
     }
-    if (elapsed >= timerInterval) {
+    if (elapsed >= effectiveInterval) {
       stopTimer();
       updateCountdownUI("正在跳轉...");
       lastSecondUpdate = 0;
@@ -725,7 +636,7 @@ const TASK_OWNER_KEY = 'bing_task_owner';
       performSearch();
       return;
     }
-    timerHandle = setTimeout(timerLoop, 250);
+    timerHandle = setTimeout(timerLoop, 1000);
   }
   function saveScheduleTime(time) {
     try {
@@ -737,25 +648,23 @@ const TASK_OWNER_KEY = 'bing_task_owner';
   }
   function performSearch() {
     if (!isTaskRunning()) return;
-    const LOCK_KEY = 'bing_count_lock';
+    const currentPageType = getBingPageType();
+    const LOCK_KEY = 'bing_slot_' + currentPageType;
     try {
       const held = localStorage.getItem(LOCK_KEY);
-      if (held && Number(held) > Date.now() - 10000) { startSearchLoop(); return; }
+      if (held && Number(held) > Date.now() - CONFIG.min_interval * 1000) { startSearchLoop(); return; }
       localStorage.setItem(LOCK_KEY, String(Date.now()));
     } catch (e) { /* 忽略錯誤，單分頁場景直接執行 */ }
-    const currentPageType = getBingPageType();
-    const releaseLock = () => { try { localStorage.removeItem(LOCK_KEY); } catch (e) { } };
     const raw = getStorageData();
     const baseConfig = (raw && raw.lastDate === getToday()) ? raw : getConfig();
-    if (currentPageType === 'pc' && baseConfig.pc_count >= CONFIG.max_pc) { releaseLock(); onTaskCompleted(); return; }
-    if (currentPageType === 'ph' && baseConfig.ph_count >= CONFIG.max_ph) { releaseLock(); onTaskCompleted(); return; }
+    if (currentPageType === 'pc' && baseConfig.pc_count >= CONFIG.max_pc) { onTaskCompleted(); return; }
+    if (currentPageType === 'ph' && baseConfig.ph_count >= CONFIG.max_ph) { onTaskCompleted(); return; }
     let newConfig = { ...baseConfig };
     if (currentPageType === 'pc') newConfig.pc_count++;
     else newConfig.ph_count++;
     saveConfig(newConfig);
     updateUI();
     if ((currentPageType === 'pc' && newConfig.pc_count >= CONFIG.max_pc) || (currentPageType === 'ph' && newConfig.ph_count >= CONFIG.max_ph)) {
-      releaseLock();
       onTaskCompleted();
       return;
     }
@@ -771,9 +680,7 @@ const TASK_OWNER_KEY = 'bing_task_owner';
         executeSearch(kw);
       };
       tryNext(keyword);
-      releaseLock();
     }).catch(() => {
-      releaseLock();
       haltTask(STATUS_PAUSED);
       updateCountdownUI("--");
       updateStatus('關鍵字載入失敗', '#d63031');
@@ -820,35 +727,10 @@ const TASK_OWNER_KEY = 'bing_task_owner';
     setTimeout(() => {
       const loc = new URL(window.location.href);
       if (isTaskRunning() && searchSubmitted && window.location.href === beforeUrl) {
-        if (document.readyState !== 'complete') { startSearchLoop(); return; }
-          let fails = 0;
-          try { fails = parseInt(sessionStorage.getItem('bing_redirect_fails') || '0'); } catch (e) { }
-          try {
-            const _s = getStorageData();
-            if (_s && _s.lastDate === getToday()) {
-              const _t = getBingPageType();
-              if (_t === 'pc') _s.pc_count = Math.max(0, _s.pc_count - 1);
-              else _s.ph_count = Math.max(0, _s.ph_count - 1);
-              saveConfig(_s);
-            }
-          } catch (e) { }
-          updateUI();
-          if (fails >= 2) {
-            haltTask(STATUS_PAUSED);
-            updateCountdownUI("--");
-            updateStatus('載入失敗，請手動到 Bing 搜尋後重試', '#d63031');
-            updateStatusBadge(STATUS_PAUSED);
-            setBtn("▶ 開始搜尋", "br_btn br_btn_start");
-            try { sessionStorage.removeItem('bing_redirect_fails'); } catch (e) { }
-            return;
-          }
-          try { sessionStorage.setItem('bing_redirect_fails', String(fails + 1)); } catch (e) { }
-          window.location.href = loc.origin + '/search?q=' + encodeURIComponent(keyword);
-          startSearchLoop();
-        } else {
-          try { sessionStorage.removeItem('bing_redirect_fails'); } catch (e) { }
-        }
-      }, 4000);
+        window.location.href = loc.origin + '/search?q=' + encodeURIComponent(keyword);
+        startSearchLoop();
+      }
+    }, getWatchdogTimeout());
     } catch (e) { }
   }
   function onTaskCompleted() {
@@ -893,6 +775,9 @@ const TASK_OWNER_KEY = 'bing_task_owner';
   }
   function getRandomInterval() {
     return Math.floor(Math.random() * ((CONFIG.max_interval - CONFIG.min_interval) * 1000 + 1)) + CONFIG.min_interval * 1000;
+  }
+  function getWatchdogTimeout() {
+    return Math.max(1000, Math.min(8000, CONFIG.min_interval * 1000 - 1000));
   }
   function updateStatus(text, color) {
     const el = document.getElementById("br_status_text");
@@ -983,10 +868,10 @@ const TASK_OWNER_KEY = 'bing_task_owner';
     scrollInterval = scrollTimeout = null;
   }
   function haltTask(status) {
-    releaseTask();
     setTabTaskStatus(status);
     stopAutoScroll();
     stopTimer();
+    try { localStorage.removeItem('bing_slot_' + getBingPageType()); } catch (e) { }
   }
   function setBtn(text, cls) {
     const b = document.getElementById('br_toggle_btn');
@@ -1007,7 +892,6 @@ const TASK_OWNER_KEY = 'bing_task_owner';
   function cleanup() {
     stopTimer();
     stopAutoScroll();
-    releaseTask();
     try { localStorage.removeItem('bing_auto_schedule'); } catch (e) { }
     try { sessionStorage.removeItem(TASK_STATUS_KEY); } catch (e) { }
   }
